@@ -81,21 +81,19 @@ jobs:
           .venv/bin/python -m pip freeze | sed -n '1,200p' || true
         shell: bash
 
-      - name: Build: clean previous state
+      - name: "Build: clean previous state"
+        continue-on-error: true
         run: |
           source .venv/bin/activate
           buildozer --version || true
           buildozer android clean || true
-        shell: bash
-        continue-on-error: true
 
-      - name: Build: run Buildozer (debug)
+      - name: "Build: run Buildozer (debug)"
+        timeout-minutes: 90
         run: |
           set -x
           source .venv/bin/activate
           buildozer -v android debug 2>&1 | tee buildozer_output.log
-        shell: bash
-        timeout-minutes: 90
 
       - name: Collect combined logs
         if: always()
