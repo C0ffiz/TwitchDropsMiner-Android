@@ -28,6 +28,8 @@ jobs:
 
       - name: Install system packages
         run: |
+          set -euo pipefail
+          echo "::group::Installing system packages"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential git wget unzip zip curl ca-certificates \
@@ -35,22 +37,41 @@ jobs:
             libffi-dev libssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev \
             cmake ninja-build libtool automake autoconf \
             openjdk-11-jdk
+          echo "::endgroup::"
+          
+          echo "::group::Configuring Java"
           sudo update-alternatives --set java /usr/lib/jvm/java-11-openjdk-amd64/bin/java
-          python3 -m pip install --upgrade pip setuptools wheel
+          echo "::endgroup::"
+          
+          echo "::group::Upgrading Python tools"
+          timeout 300 python3 -m pip install --upgrade pip setuptools wheel
+          echo "::endgroup::"
         shell: bash
 
       - name: Setup Android SDK cmdline-tools
         run: |
+          set -euo pipefail
+          echo "::group::Downloading Android SDK cmdline-tools"
           mkdir -p "${ANDROID_HOME}"
           cd "${ANDROID_HOME}"
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip -O cmdline-tools.zip
+          timeout 300 wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip -O cmdline-tools.zip
+          echo "Download complete"
+          echo "::endgroup::"
+          
+          echo "::group::Extracting cmdline-tools"
           unzip -q cmdline-tools.zip -d cmdline-tools-tmp
           mkdir -p cmdline-tools/latest
-          mv cmdline-tools-tmp/cmdline-tools/* cmdline-tools/latest/ || true
+          mv cmdline-tools-tmp/cmdline-tools/* cmdline-tools/latest/
           rm -rf cmdline-tools.zip cmdline-tools-tmp
+          echo "Extraction complete"
+          echo "::endgroup::"
+          
+          echo "::group::Installing SDK components"
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
-          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-30" "build-tools;30.0.3" "ndk;23.1.7779620" "cmake;3.10.2.4988404"
+          timeout 600 bash -c 'yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-30" "build-tools;30.0.3" "ndk;23.1.7779620" "cmake;3.10.2.4988404"'
           yes | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
+          echo "SDK components installed"
+          echo "::endgroup::"
         shell: bash
 
       - name: Cache pip and .buildozer
@@ -65,60 +86,126 @@ jobs:
 
       - name: Create and activate virtualenv
         run: |
+          set -euo pipefail
+          echo "::group::Creating virtual environment"
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install --upgrade pip
-          pip install buildozer cython
-          pip install --upgrade python-for-android
+          echo "::endgroup::"
+          
+          echo "::group::Installing buildozer and dependencies"
+          timeout 300 pip install --upgrade pip
+          timeout 600 pip install buildozer cython
+          timeout 600 pip install --upgrade python-for-android
+          echo "::endgroup::"
         shell: bash
 
       - name: Print environment (debug)
         run: |
+          set -euo pipefail
+          echo "::group::Environment variables"
           echo "ANDROID_HOME=${ANDROID_HOME}"
           echo "JAVA_HOME=${JAVA_HOME}"
-          java -version || true
+          echo "::endgroup::"
+          
+          echo "::group::Java version"
+          java -version
+          echo "::endgroup::"
+          
+          echo "::group::Python version"
           python -V
-          .venv/bin/python -m pip freeze | sed -n '1,200p' || true
+          echo "::endgroup::"
+          
+          echo "::group::Installed Python packages"
+          .venv/bin/python -m pip freeze | sed -n '1,200p'
+          echo "::endgroup::"
+        shell: bash
+
+      - name: Validate Android SDK installation
+        run: |
+          set -euo pipefail
+          echo "::group::Verifying Android SDK paths"
+          if [ ! -d "${ANDROID_HOME}" ]; then
+            echo "ERROR: ANDROID_HOME directory does not exist: ${ANDROID_HOME}"
+            exit 1
+          fi
+          echo "✓ ANDROID_HOME exists: ${ANDROID_HOME}"
+          echo "::endgroup::"
+          
+          echo "::group::Checking SDK components"
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
+          
+          if ! command -v sdkmanager &> /dev/null; then
+            echo "ERROR: sdkmanager not found in PATH"
+            exit 1
+          fi
+          echo "✓ sdkmanager found"
+          
+          if ! command -v adb &> /dev/null; then
+            echo "ERROR: adb not found in PATH"
+            exit 1
+          fi
+          echo "✓ adb found"
+          echo "::endgroup::"
+          
+          echo "::group::SDK and NDK versions"
+          sdkmanager --list_installed --sdk_root="${ANDROID_HOME}" | head -20
+          
+          if [ -d "${ANDROID_HOME}/ndk" ]; then
+            echo "NDK directory contents:"
+            ls -la "${ANDROID_HOME}/ndk/"
+          fi
+          echo "::endgroup::"
         shell: bash
 
       - name: "Build: clean previous state"
-        continue-on-error: true
         run: |
+          set -euo pipefail
           source .venv/bin/activate
-          buildozer --version || true
-          buildozer android clean || true
+          buildozer --version
+          buildozer android clean || echo "No previous build to clean"
 
       - name: "Build: run Buildozer (debug)"
         timeout-minutes: 90
         run: |
-          set -x
+          set -euxo pipefail
           source .venv/bin/activate
+          echo "Starting buildozer build at $(date)"
           buildozer -v android debug 2>&1 | tee buildozer_output.log
+          echo "Build completed at $(date)"
 
       - name: Collect combined logs
         if: always()
         run: |
+          set -euo pipefail
+          echo "::group::Collecting build logs"
           echo "==== tail buildozer_output.log ====" > combined_logs.txt
           if [ -f buildozer_output.log ]; then
-            tail -n 2000 buildozer_output.log >> combined_logs.txt || true
+            tail -n 2000 buildozer_output.log >> combined_logs.txt 2>&1 || echo "Failed to read buildozer_output.log" >> combined_logs.txt
+          else
+            echo "buildozer_output.log not found" >> combined_logs.txt
           fi
+          
           if [ -d .buildozer ]; then
             find .buildozer -type f \( -iname "*.log" -o -iname "*.txt" -o -iname "*.out" \) -print0 | while IFS= read -r -d '' f; do
               echo "==== FILE: $f ====" >> combined_logs.txt
-              sed -n '1,500p' "$f" >> combined_logs.txt || true
+              sed -n '1,500p' "$f" >> combined_logs.txt 2>&1 || echo "Failed to read $f" >> combined_logs.txt
               echo >> combined_logs.txt
             done
           fi
+          
           echo "==== Listing possible outputs ====" >> combined_logs.txt
-          ls -la bin || true >> combined_logs.txt 2>&1
+          ls -la bin >> combined_logs.txt 2>&1 || echo "bin/ directory not found" >> combined_logs.txt
+          
           for d in .buildozer/android/platform/build-* ; do
             if [ -d "$d" ]; then
               echo "==== DIR: $d ====" >> combined_logs.txt
-              ls -la "$d" || true >> combined_logs.txt 2>&1
-              ls -la "$d"/outputs || true >> combined_logs.txt 2>&1
+              ls -la "$d" >> combined_logs.txt 2>&1 || echo "Failed to list $d" >> combined_logs.txt
+              ls -la "$d"/outputs >> combined_logs.txt 2>&1 || echo "No outputs directory in $d" >> combined_logs.txt
             fi
-          done || true
-          zip -r build_debug_combined.zip combined_logs.txt || true
+          done
+          
+          zip -r build_debug_combined.zip combined_logs.txt || echo "Failed to create zip archive"
+          echo "::endgroup::"
         shell: bash
 
       - name: Upload combined build logs
