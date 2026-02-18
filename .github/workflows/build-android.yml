@@ -81,7 +81,7 @@ jobs:
           .venv/bin/python -m pip freeze | sed -n '1,200p' || true
         shell: bash
 
-      - name: Build: clean previous state
+      - name: Build clean previous state
         run: |
           source .venv/bin/activate
           buildozer --version || true
@@ -89,7 +89,7 @@ jobs:
         shell: bash
         continue-on-error: true
 
-      - name: Build: run Buildozer (debug)
+      - name: Build run Buildozer (debug)
         run: |
           set -x
           source .venv/bin/activate
