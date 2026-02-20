@@ -156,8 +156,9 @@ class HomeScreen(BaseScreen):
         self.drop_label.text = self.drop_text
         self.progress_bar.value = self.progress_value
 
-    def update_progress(self, current: int, total: int):
+    def update_progress(self, args):
         """Update progress bar."""
+        current, total = args
         if total > 0:
             self.progress_value = (current / total) * 100
             self.progress_bar.value = self.progress_value

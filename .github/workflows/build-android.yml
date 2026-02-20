@@ -9,15 +9,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Use Python 3.10
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -29,15 +31,15 @@ jobs:
             python3-dev python3-venv python3-pip pkg-config \
             libffi-dev libssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev \
             cmake ninja-build libtool automake autoconf \
-            openjdk-11-jdk
-          sudo update-alternatives --set java /usr/lib/jvm/java-11-openjdk-amd64/bin/java
+            zlib1g-dev libncurses5-dev libsqlite3-dev ccache lld \
+            openjdk-17-jdk
           python3 -m pip install --upgrade pip setuptools wheel
         shell: bash
 
       - name: Setup Android SDK cmdline-tools
         run: |
-          export ANDROID_HOME="${HOME}/android-sdk"
-          export ANDROID_SDK_ROOT="${HOME}/android-sdk"
+          export ANDROID_HOME="${HOME}/.buildozer/android/platform/android-sdk"
+          export ANDROID_SDK_ROOT="${HOME}/.buildozer/android/platform/android-sdk"
           mkdir -p "${ANDROID_HOME}"
           cd "${ANDROID_HOME}"
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip -O cmdline-tools.zip
@@ -46,12 +48,23 @@ jobs:
           mv cmdline-tools-tmp/cmdline-tools/* cmdline-tools/latest/ || true
           rm -rf cmdline-tools.zip cmdline-tools-tmp
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
-          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-30" "build-tools;30.0.3" "ndk;23.1.7779620" "cmake;3.10.2.4988404"
+          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653" || true
           yes | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
+          mkdir -p "${ANDROID_HOME}/licenses"
+          # Standard Android SDK License (hash values accepted by sdkmanager --licenses)
+          printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e' > "${ANDROID_HOME}/licenses/android-sdk-license"
+          # Android SDK Preview License (covers RC/preview build-tools like 37.0.0-rc1)
+          printf '\n84831b9409646a918e30573bab4c9c91346d8abd' > "${ANDROID_HOME}/licenses/android-sdk-preview-license"
+          # Buildozer 1.5.0 looks for sdkmanager at the legacy tools/bin path; create symlinks for compatibility
+          mkdir -p "${ANDROID_HOME}/tools/bin"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "${ANDROID_HOME}/tools/bin/sdkmanager"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager" "${ANDROID_HOME}/tools/bin/avdmanager"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.2.9519653" >> $GITHUB_ENV
           echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_HOME}/platform-tools" >> $GITHUB_PATH
+          echo "${ANDROID_HOME}/ndk/25.2.9519653" >> $GITHUB_PATH
         shell: bash
 
       - name: Cache pip and .buildozer
@@ -70,15 +83,14 @@ jobs:
           source .venv/bin/activate
           pip install --upgrade pip
           pip install buildozer cython
-          pip install --upgrade python-for-android
         shell: bash
 
       - name: Print environment (debug)
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME}"
-          echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
           java -version || true
-          python -V
+          python3 -V
           .venv/bin/python -m pip freeze | sed -n '1,200p' || true
         shell: bash
 
@@ -94,7 +106,8 @@ jobs:
         run: |
           set -x
           source .venv/bin/activate
-          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH=${JAVA_HOME}/bin:${PATH}
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90

@@ -7,19 +7,18 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,txt
 
 version = 0.1
-requirements = python3,kivy,requests,urllib3,chardet,certifi,idna,charset-normalizer,android,plyer
+requirements = python3,kivy,kivymd,requests,urllib3,chardet,certifi,idna,android,plyer
 
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.permissions = INTERNET,ACCESS_NETWORK_STATE
 
-android.api = 30
+android.api = 34
 android.minapi = 21
-android.sdk = 30
-android.ndk = 23b
+android.ndk = 25b
 android.ndk_api = 21
 
-android.arch = armeabi-v7a
+android.archs = arm64-v8a,armeabi-v7a
 
-p4a.branch = master
+p4a.branch = develop
 
 fullscreen = 0
 
