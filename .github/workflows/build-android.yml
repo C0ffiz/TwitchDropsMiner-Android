@@ -9,15 +9,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Use Python 3.10
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -29,8 +31,8 @@ jobs:
             python3-dev python3-venv python3-pip pkg-config \
             libffi-dev libssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev \
             cmake ninja-build libtool automake autoconf \
-            openjdk-11-jdk
-          sudo update-alternatives --set java /usr/lib/jvm/java-11-openjdk-amd64/bin/java
+            zlib1g-dev libncurses5-dev libsqlite3-dev ccache lld \
+            openjdk-17-jdk
           python3 -m pip install --upgrade pip setuptools wheel
         shell: bash
 
@@ -46,12 +48,14 @@ jobs:
           mv cmdline-tools-tmp/cmdline-tools/* cmdline-tools/latest/ || true
           rm -rf cmdline-tools.zip cmdline-tools-tmp
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
-          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-30" "build-tools;30.0.3" "ndk;23.1.7779620" "cmake;3.10.2.4988404"
+          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653"
           yes | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.2.9519653" >> $GITHUB_ENV
           echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_HOME}/platform-tools" >> $GITHUB_PATH
+          echo "${ANDROID_HOME}/ndk/25.2.9519653" >> $GITHUB_PATH
         shell: bash
 
       - name: Cache pip and .buildozer
@@ -76,9 +80,9 @@ jobs:
       - name: Print environment (debug)
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME}"
-          echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
           java -version || true
-          python -V
+          python3 -V
           .venv/bin/python -m pip freeze | sed -n '1,200p' || true
         shell: bash
 
@@ -94,7 +98,7 @@ jobs:
         run: |
           set -x
           source .venv/bin/activate
-          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
