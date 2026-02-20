@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import threading
-from kivy.app import App
+from kivymd.app import MDApp
 from kivy.clock import Clock
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("TwitchDrops")
 
 
-class TwitchDropsMinerApp(App):
+class TwitchDropsMinerApp(MDApp):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.title = "TwitchDropsMiner"

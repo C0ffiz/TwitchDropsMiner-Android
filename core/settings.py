@@ -4,10 +4,11 @@ import os
 from pathlib import Path
 from core.constants import PriorityMode
 
-# Android storage path
-if os.environ.get('ANDROID_STORAGE'):
-    APP_DIR = Path(os.environ['ANDROID_STORAGE']) / "TwitchDropsMiner"
-else:
+# Android storage path: use app-internal storage (no permissions required)
+try:
+    from android.storage import app_storage_path
+    APP_DIR = Path(app_storage_path()) / "TwitchDropsMiner"
+except ImportError:
     APP_DIR = Path.home() / ".twitch_drops_android"
 
 APP_DIR.mkdir(parents=True, exist_ok=True)
