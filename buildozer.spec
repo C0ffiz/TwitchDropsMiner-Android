@@ -11,7 +11,7 @@ requirements = python3,kivy,requests,urllib3,chardet,certifi,idna,android,plyer
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
-android.api = 33
+android.api = 34
 android.minapi = 21
 android.ndk = 25b
 android.ndk_api = 21
