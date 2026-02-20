@@ -55,6 +55,10 @@ jobs:
           printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e' > "${ANDROID_HOME}/licenses/android-sdk-license"
           # Android SDK Preview License (covers RC/preview build-tools like 37.0.0-rc1)
           printf '\n84831b9409646a918e30573bab4c9c91346d8abd' > "${ANDROID_HOME}/licenses/android-sdk-preview-license"
+          # Buildozer 1.5.0 looks for sdkmanager at the legacy tools/bin path; create symlinks for compatibility
+          mkdir -p "${ANDROID_HOME}/tools/bin"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "${ANDROID_HOME}/tools/bin/sdkmanager"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager" "${ANDROID_HOME}/tools/bin/avdmanager"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.2.9519653" >> $GITHUB_ENV
@@ -79,7 +83,6 @@ jobs:
           source .venv/bin/activate
           pip install --upgrade pip
           pip install buildozer cython
-          pip install --upgrade python-for-android
         shell: bash
 
       - name: Print environment (debug)
@@ -104,6 +107,7 @@ jobs:
           set -x
           source .venv/bin/activate
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH=${JAVA_HOME}/bin:${PATH}
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90

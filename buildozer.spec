@@ -13,11 +13,10 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_
 
 android.api = 33
 android.minapi = 21
-android.sdk = 33
 android.ndk = 25b
 android.ndk_api = 21
 
-android.arch = armeabi-v7a
+android.archs = armeabi-v7a
 
 p4a.branch = develop
 
