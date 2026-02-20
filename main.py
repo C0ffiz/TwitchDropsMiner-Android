@@ -1,4 +1,88 @@
 """TwitchDropsMiner Android - Main Application"""
+# ── Crash-log bootstrap ─────────────────────────────────────────────────────
+# Stdlib-only imports come first so the crash logger is active before any
+# third-party import (e.g. kivymd) that could itself raise an ImportError.
+import sys
+import os
+import traceback
+from pathlib import Path
+from datetime import datetime
+
+
+def _get_log_dir() -> Path:
+    """Return a user-accessible directory for logs (no extra permissions needed)."""
+    if 'ANDROID_ARGUMENT' in os.environ:
+        # Package name must match buildozer.spec package.domain + package.name.
+        # App-specific external storage – no WRITE_EXTERNAL_STORAGE permission
+        # required. Visible in Samsung My Files under:
+        #   Internal storage → Android → data → org.example.twitchdropsminer → files
+        pkg = 'org.example.twitchdropsminer'
+        candidate = Path('/sdcard/Android/data') / pkg / 'files'
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            # Fallback: internal app storage (adb pull only)
+            return Path('/data/user/0') / pkg / 'files'
+    return Path.home() / '.twitch_drops_android'
+
+
+LOG_DIR = _get_log_dir()
+CRASH_LOG = LOG_DIR / 'crash.log'
+
+
+def _write_log(text: str) -> None:
+    """Append text to the crash/run log file."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CRASH_LOG, 'a', encoding='utf-8') as fh:
+            fh.write(text)
+    except Exception:
+        pass  # nothing we can do if even the log write fails
+
+
+class _TeeStream:
+    """Write to both the original stream and the crash log file."""
+
+    def __init__(self, original):
+        self._orig = original
+
+    def write(self, s: str) -> None:
+        _write_log(s)
+        try:
+            self._orig.write(s)
+        except Exception:
+            pass
+
+    def flush(self) -> None:
+        try:
+            self._orig.flush()
+        except Exception:
+            pass
+
+    def fileno(self):
+        try:
+            return self._orig.fileno()
+        except Exception:
+            return -1
+
+
+def _excepthook(exc_type, exc_value, exc_tb):
+    """Global handler — writes full traceback to crash.log before exiting."""
+    tb = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    _write_log(f'\n=== CRASH {datetime.now():%Y-%m-%d %H:%M:%S} ===\n{tb}\n')
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+# Install before any third-party import so even ImportErrors are captured.
+sys.excepthook = _excepthook
+sys.stderr = _TeeStream(sys.stderr)
+_write_log(
+    f'=== START {datetime.now():%Y-%m-%d %H:%M:%S} '
+    f'log={CRASH_LOG} ===\n'
+)
+# ── End crash-log bootstrap ──────────────────────────────────────────────────
+
 import asyncio
 import logging
 import threading
@@ -17,12 +101,18 @@ from ui.screens import (
     LogsScreen
 )
 
-# Setup logging
+# Setup logging — also route all logger.* output to crash.log
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+crash_log_handler = logging.FileHandler(str(CRASH_LOG), encoding='utf-8')
+crash_log_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+))
+logging.getLogger().addHandler(crash_log_handler)
 logger = logging.getLogger("TwitchDrops")
+logger.info(f"Crash log: {CRASH_LOG}")
 
 
 class TwitchDropsMinerApp(MDApp):
