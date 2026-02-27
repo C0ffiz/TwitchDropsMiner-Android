@@ -3,6 +3,7 @@ import asyncio
 import logging
 import threading
 from kivy.clock import Clock
+from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
 from kivymd.app import MDApp
@@ -55,7 +56,17 @@ class TwitchDropsMinerApp(MDApp):
             self.screen_manager.current = 'home'
         else:
             self.screen_manager.current = 'login'
+        Window.bind(on_keyboard=self.on_key_back)
         return self.screen_manager
+
+    def on_key_back(self, window, key, *args):
+        if key == 27:  # Android back button / Escape
+            current = self.screen_manager.current
+            if current in ('inventory', 'channels', 'settings', 'logs'):
+                self.screen_manager.current = 'home'
+                return True  # Consumed — don't exit
+            # On home or login, allow default (exit) behavior
+        return False
 
     def _update_ui(self, func, *args):
         Clock.schedule_once(lambda dt: func(*args))
@@ -107,8 +118,9 @@ class TwitchDropsMinerApp(MDApp):
                     self.screen_manager.current = 'home'
                 Clock.schedule_once(_navigate)
             except Exception as e:
-                def _show_error(dt):
-                    self.screen_manager.get_screen('login').show_error(str(e))
+                error_msg = str(e)  # captura o valor antes da closure
+                def _show_error(dt, msg=error_msg):
+                    self.screen_manager.get_screen('login').show_error(msg)
                 Clock.schedule_once(_show_error)
 
         future = asyncio.run_coroutine_threadsafe(self.twitch_client.login(), self.loop)

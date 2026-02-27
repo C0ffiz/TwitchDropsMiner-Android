@@ -166,10 +166,9 @@ class TwitchClient:
 
             session = await self.get_session()
             async with session.get(
-                "https://api.twitch.tv/helix/users",
+                "https://id.twitch.tv/oauth2/validate",
                 headers={
-                    'Authorization': f'Bearer {token}',
-                    'Client-Id': CLIENT_ID,
+                    'Authorization': f'OAuth {token}',
                 }
             ) as response:
                 if response.status != 200:
@@ -177,13 +176,11 @@ class TwitchClient:
 
                 data = await response.json()
 
-            users = data.get("data", [])
-            if not users:
+            if "user_id" not in data or "login" not in data:
                 raise LoginException("Invalid token: no user data returned")
 
-            user = users[0]
-            self.settings.user_id = int(user["id"])
-            self.settings.username = user["login"]
+            self.settings.user_id = int(data["user_id"])
+            self.settings.username = data["login"]
             self.settings.save()
 
             self._logged_in.set(True)
