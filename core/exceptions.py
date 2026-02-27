@@ -1,8 +1,11 @@
 """Custom exceptions for TwitchDropsMiner Android"""
 
+
 class MinerException(Exception):
-    """Base exception class for this application."""
-    def __init__(self, *args):
+    """
+    Base exception class for this application.
+    """
+    def __init__(self, *args: object):
         if args:
             super().__init__(*args)
         else:
@@ -10,23 +13,68 @@ class MinerException(Exception):
 
 
 class ExitRequest(MinerException):
-    """Raised when the application is requested to exit."""
+    """
+    Raised when the application is requested to exit from outside of the main loop.
+
+    Intended for internal use only.
+    """
     def __init__(self):
         super().__init__("Application was requested to exit")
 
 
+class ReloadRequest(MinerException):
+    """
+    Raised when the application is requested to reload entirely, without closing the GUI.
+
+    Intended for internal use only.
+    """
+    def __init__(self):
+        super().__init__("Application was requested to reload entirely")
+
+
 class RequestException(MinerException):
-    """Raised for cases where a web request doesn't return what we wanted."""
-    def __init__(self, *args):
+    """
+    Raised for cases where a web request doesn't return what we wanted it to.
+    """
+    def __init__(self, *args: object):
         if args:
             super().__init__(*args)
         else:
             super().__init__("Unknown error during request")
 
 
+class RequestInvalid(RequestException):
+    """
+    Raised when a request becomes no longer valid inside its retry loop.
+
+    Intended for internal use only.
+    """
+    def __init__(self):
+        super().__init__("Request became invalid during its retry loop")
+
+
+class WebsocketClosed(RequestException):
+    """
+    Raised when the websocket connection has been closed.
+
+    Attributes:
+    -----------
+    received: bool
+        `True` if the closing was caused by our side receiving a close frame, `False` otherwise.
+    """
+    def __init__(self, *args: object, received: bool = False):
+        if args:
+            super().__init__(*args)
+        else:
+            super().__init__("Websocket has been closed")
+        self.received: bool = received
+
+
 class LoginException(RequestException):
-    """Raised when an exception occurs during login phase."""
-    def __init__(self, *args):
+    """
+    Raised when an exception occurs during login phase.
+    """
+    def __init__(self, *args: object):
         if args:
             super().__init__(*args)
         else:
@@ -34,22 +82,52 @@ class LoginException(RequestException):
 
 
 class CaptchaRequired(LoginException):
-    """Captcha is required."""
+    """
+    The most dreaded thing about automated scripts...
+    """
     def __init__(self):
         super().__init__("Captcha is required")
 
 
 class GQLException(RequestException):
-    """Raised when a GQL request returns an error response."""
+    """
+    Raised when a GQL request returns an error response.
+    """
     def __init__(self, message: str):
         super().__init__(message)
 
 
-class WebsocketClosed(RequestException):
-    """Raised when the websocket connection has been closed."""
-    def __init__(self, *args, received: bool = False):
+# Android-specific
+class NetworkUnavailableError(RequestException):
+    """
+    Raised when the Android device has no active network connection.
+
+    On mobile, connections can drop between WiFi and cellular or disappear
+    entirely. This is distinct from a transient connection error and signals
+    that the retry loop should pause until connectivity is restored.
+    """
+    def __init__(self, *args: object):
         if args:
             super().__init__(*args)
         else:
-            super().__init__("Websocket has been closed")
-        self.received = received
+            super().__init__("No network connection available on this device")
+
+
+# Android-specific
+class AndroidPermissionError(MinerException):
+    """
+    Raised when a required Android runtime permission has not been granted.
+
+    Attributes:
+    -----------
+    permission: str
+        The Android permission string that was denied (e.g. 'android.permission.INTERNET').
+    """
+    def __init__(self, permission: str = ""):
+        msg = (
+            f"Required Android permission denied: {permission}"
+            if permission
+            else "Required Android permission was denied"
+        )
+        super().__init__(msg)
+        self.permission: str = permission
