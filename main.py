@@ -99,8 +99,20 @@ class TwitchDropsMinerApp(MDApp):
     def login(self, oauth_token):
         self.settings.oauth_token = oauth_token
         self.settings.save()
-        asyncio.run_coroutine_threadsafe(self.twitch_client.login(), self.loop)
-        self.screen_manager.current = 'home'
+
+        def _on_login_done(future):
+            try:
+                future.result()
+                def _navigate(dt):
+                    self.screen_manager.current = 'home'
+                Clock.schedule_once(_navigate)
+            except Exception as e:
+                def _show_error(dt):
+                    self.screen_manager.get_screen('login').show_error(str(e))
+                Clock.schedule_once(_show_error)
+
+        future = asyncio.run_coroutine_threadsafe(self.twitch_client.login(), self.loop)
+        future.add_done_callback(_on_login_done)
 
     def logout(self):
         self.stop_mining()

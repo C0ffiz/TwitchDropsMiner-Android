@@ -135,7 +135,12 @@ class LoginScreen(BaseScreen):
         login_btn.add_widget(MDButtonText(text="Login"))
         content.add_widget(login_btn)
         content.add_widget(MDLabel(text="1. Visit twitchtokengenerator.com\n2. Select Custom Scope Token\n3. Generate and paste here", size_hint_y=None, height=dp(80)))
+        self.error_label = MDLabel(text="", theme_text_color="Error", size_hint_y=None, height=dp(40))
+        content.add_widget(self.error_label)
         self.layout.add_widget(content)
+
+    def show_error(self, message: str):
+        self.error_label.text = message
 
     def do_login(self, *args):
         token = self.token_field.text.strip()
@@ -146,7 +151,7 @@ class LoginScreen(BaseScreen):
 class InventoryScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.add_toolbar("Inventory", leading_icon="arrow-left", leading_callback=lambda x: self.app.screen_manager.switch_to(self.app.screen_manager.get_screen('home')))
+        self.add_toolbar("Inventory", leading_icon="arrow-left", leading_callback=lambda x: setattr(self.manager, 'current', 'home'))
         scroll = ScrollView()
         self.list_view = MDList()
         scroll.add_widget(self.list_view)
@@ -169,7 +174,7 @@ class InventoryScreen(BaseScreen):
 class ChannelsScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.add_toolbar("Channels", leading_icon="arrow-left", leading_callback=lambda x: self.app.screen_manager.switch_to(self.app.screen_manager.get_screen('home')))
+        self.add_toolbar("Channels", leading_icon="arrow-left", leading_callback=lambda x: setattr(self.manager, 'current', 'home'))
         scroll = ScrollView()
         self.list_view = MDList()
         scroll.add_widget(self.list_view)
@@ -182,7 +187,7 @@ class ChannelsScreen(BaseScreen):
 class SettingsScreen(BaseScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.add_toolbar("Settings", leading_icon="arrow-left", leading_callback=lambda x: self.app.screen_manager.switch_to(self.app.screen_manager.get_screen('home')))
+        self.add_toolbar("Settings", leading_icon="arrow-left", leading_callback=lambda x: setattr(self.manager, 'current', 'home'))
         scroll = ScrollView()
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(16), size_hint_y=None)
         content.bind(minimum_height=content.setter('height'))
@@ -226,7 +231,7 @@ class LogsScreen(BaseScreen):
         toolbar.add_widget(MDTopAppBarTitle(text="Logs"))
         leading = MDTopAppBarLeadingButtonContainer()
         back_btn = MDActionTopAppBarButton(icon="arrow-left")
-        back_btn.bind(on_release=lambda x: self.app.screen_manager.switch_to(self.app.screen_manager.get_screen('home')))
+        back_btn.bind(on_release=lambda x: setattr(self.manager, 'current', 'home'))
         leading.add_widget(back_btn)
         toolbar.add_widget(leading)
         trailing = MDTopAppBarTrailingButtonContainer()
