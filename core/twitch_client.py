@@ -95,6 +95,12 @@ class TwitchClient:
     # SESSION MANAGEMENT
     # ========================================================================
 
+    def _clean_token(self, token: str) -> str:
+        """Strip 'oauth:' prefix from token if present."""
+        if token.startswith('oauth:'):
+            return token[len('oauth:'):]
+        return token
+
     async def get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
@@ -103,7 +109,7 @@ class TwitchClient:
                 'User-Agent': USER_AGENT,
             }
             if self.settings.oauth_token:
-                headers['Authorization'] = f'OAuth {self.settings.oauth_token}'
+                headers['Authorization'] = f'OAuth {self._clean_token(self.settings.oauth_token)}'
 
             self._session = aiohttp.ClientSession(headers=headers)
         return self._session
@@ -156,38 +162,41 @@ class TwitchClient:
         self.update_status("Logging in...")
 
         try:
-            # Validate token by fetching user info
-            operation = {
-                "operationName": "CoreActionsCurrentUser",
-                "extensions": {
-                    "persistedQuery": {
-                        "version": 1,
-                        "sha256Hash": "6f1b0c8c5f0e4e4e8f0e4e4e8f0e4e4e8f0e4e4e8f0e4e4e8f0e4e4e8f0e4e4e"
-                    }
-                },
-                "variables": {}
-            }
+            token = self._clean_token(self.settings.oauth_token)
 
-            response = await self.gql_request(operation)
+            session = await self.get_session()
+            async with session.get(
+                "https://api.twitch.tv/helix/users",
+                headers={
+                    'Authorization': f'Bearer {token}',
+                    'Client-Id': CLIENT_ID,
+                }
+            ) as response:
+                if response.status != 200:
+                    raise LoginException(f"Token validation failed (HTTP {response.status})")
 
-            if "data" in response and "currentUser" in response["data"]:
-                user_data = response["data"]["currentUser"]
-                if user_data:
-                    self.settings.user_id = int(user_data["id"])
-                    self.settings.username = user_data["login"]
-                    self.settings.save()
+                data = await response.json()
 
-                    self._logged_in.set(True)
-                    self.print(f"Logged in as: {self.settings.username}")
-                    self.update_status(f"Logged in: {self.settings.username}")
-                    return True
+            users = data.get("data", [])
+            if not users:
+                raise LoginException("Invalid token: no user data returned")
 
-            raise LoginException("Invalid token")
+            user = users[0]
+            self.settings.user_id = int(user["id"])
+            self.settings.username = user["login"]
+            self.settings.save()
 
+            self._logged_in.set(True)
+            self.print(f"Logged in as: {self.settings.username}")
+            self.update_status(f"Logged in: {self.settings.username}")
+            return True
+
+        except LoginException:
+            raise
         except Exception as e:
             self.print(f"Login failed: {e}")
             self.update_status("Login failed")
-            raise
+            raise LoginException(f"Login failed: {e}")
 
     def is_logged_in(self) -> bool:
         """Check if logged in."""
