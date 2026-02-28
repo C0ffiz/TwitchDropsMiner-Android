@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,txt
 
 version = 0.1
-requirements = python3,kivy,requests,urllib3,chardet,certifi,idna,charset-normalizer,android,plyer
+requirements = python3,kivy,requests,urllib3,chardet,certifi,idna,charset-normalizer,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
