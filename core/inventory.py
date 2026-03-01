@@ -163,7 +163,7 @@ class BaseDrop:
             self._twitch.print(
                 _("status", "claimed_drop").format(drop=claim_text)
             )
-            # Android-specific: pystray tray notify removed; use notifications backend
+            # Android-specific: desktop tray notify removed; use notifications backend
             self._twitch.notifications.notify_drop(self)
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
