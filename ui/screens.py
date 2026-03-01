@@ -125,6 +125,15 @@ class HomeScreen(BaseScreen):
             self.progress_value = (current / total) * 100
             self.progress_bar.value = self.progress_value
 
+    def on_enter(self, *args):
+        # Android-specific: re-sync drop and channel when returning to HomeScreen
+        # (e.g. after background resume or navigation from another screen)
+        tc = self.app.twitch_client
+        if tc is None:
+            return
+        self.update_drop(tc.current_drop)
+        self.update_channel(tc.watching_channel.get_with_default("") or "")
+
 
 class LoginScreen(BaseScreen):
     def __init__(self, **kwargs):
@@ -161,6 +170,14 @@ class InventoryScreen(BaseScreen):
         self.list_view = MDList()
         scroll.add_widget(self.list_view)
         self.layout.add_widget(scroll)
+
+    def on_enter(self, *args):
+        # Android-specific: refresh inventory list every time the screen is entered
+        # so stale state after background resume or first open before callback fires is corrected
+        tc = self.app.twitch_client
+        if tc is None:
+            return
+        self.update_inventory(tc.inventory)
 
     def update_inventory(self, inventory):
         self.list_view.clear_widgets()
@@ -235,18 +252,26 @@ class SettingsScreen(BaseScreen):
 
         scroll.add_widget(content)
         self.layout.add_widget(scroll)
+        self._loading = False  # Android-specific: guard against save() on programmatic active changes
 
     def on_enter(self, *args):
         # Android-specific: read settings here, not in __init__, to avoid None app during construction
+        # _loading prevents on_auto_claim_change / on_notifications_change from calling save() here
+        self._loading = True
         settings = self.app.settings
         self.auto_claim_switch.active = settings.auto_claim
         self.notif_switch.active = settings.notifications_enabled
+        self._loading = False
 
     def on_auto_claim_change(self, instance, value):
+        if self._loading:  # Android-specific: skip save during programmatic on_enter sync
+            return
         self.app.settings.auto_claim = value
         self.app.settings.save()
 
     def on_notifications_change(self, instance, value):
+        if self._loading:  # Android-specific: skip save during programmatic on_enter sync
+            return
         self.app.settings.notifications_enabled = value
         self.app.settings.save()
 
