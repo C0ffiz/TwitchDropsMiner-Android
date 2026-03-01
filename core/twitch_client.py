@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Callable, Any
 
@@ -24,6 +25,21 @@ from core.channel import Channel
 logger = logging.getLogger("TwitchDrops")
 
 
+class _NotificationsShim:
+    """
+    Android-specific: bridges inventory's notify_drop() call to TwitchClient.notify().
+    Inventory calls self._twitch.notifications.notify_drop(drop) after claiming.
+    """
+    def __init__(self, twitch: "TwitchClient") -> None:
+        self._twitch = twitch
+
+    def notify_drop(self, drop) -> None:
+        self._twitch.notify(
+            "Drop Claimed",
+            f"{drop.rewards_text()}\n{drop.campaign.game.name}"
+        )
+
+
 class TwitchClient:
     """Main Twitch client for mining drops."""
 
@@ -43,6 +59,7 @@ class TwitchClient:
         self.watching_channel: Optional[Channel] = None
         self.current_drop: Optional[TimedDrop] = None
         self.games: set[Game] = set()
+        self.notifications = _NotificationsShim(self)  # Android-specific
 
         # Websocket
         self.websocket_pool: Optional[WebsocketPool] = None
@@ -70,6 +87,17 @@ class TwitchClient:
     def update_status(self, status: str):
         """Update status in UI."""
         self._callback('on_status', status)
+
+    def change_state(self, state: State) -> None:
+        """
+        Update miner state, triggering state-transition logic.
+        Android-specific: CHANNEL_SWITCH schedules async switch on next loop iteration
+        """
+        self.state = state
+        if state == State.CHANNEL_SWITCH:
+            asyncio.get_event_loop().call_soon(
+                lambda: asyncio.ensure_future(self.switch_channel())
+            )
 
     def update_progress(self, current: int, total: int):
         """Update progress in UI."""
@@ -119,6 +147,16 @@ class TwitchClient:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    @asynccontextmanager
+    async def request(self, method: str, url, **kwargs):
+        """
+        Async context manager for HTTP requests.
+        Android-specific: wraps aiohttp session so Channel can call self._twitch.request(...)
+        """
+        session = await self.get_session()
+        async with session.request(method, url, **kwargs) as response:
+            yield response
 
     # ========================================================================
     # GQL REQUESTS
@@ -321,6 +359,32 @@ class TwitchClient:
 
         return channels[0]
 
+    def on_channel_update(
+        self,
+        channel: Channel,
+        stream_before,
+        stream_after,
+    ) -> None:
+        """
+        Called by Channel when its stream status changes.
+        Android-specific: triggers UI updates and channel switching logic
+        """
+        if stream_before is None and stream_after is not None:
+            # Channel came online
+            logger.info(f"{channel.name} went ONLINE")
+            if self.watching_channel is None:
+                asyncio.get_event_loop().call_soon(
+                    lambda: asyncio.ensure_future(self.switch_channel(channel))
+                )
+        elif stream_before is not None and stream_after is None:
+            # Channel went offline
+            logger.info(f"{channel.name} went OFFLINE")
+            if self.watching_channel == channel:
+                asyncio.get_event_loop().call_soon(
+                    lambda: asyncio.ensure_future(self.switch_channel())
+                )
+        channel.display()
+
     async def switch_channel(self, channel: Optional[Channel] = None):
         """Switch to a different channel."""
         if channel is None:
@@ -347,14 +411,11 @@ class TwitchClient:
     # ========================================================================
 
     async def send_watch(self) -> bool:
-        """Send watch event to progress drops."""
+        """Send watch event via the channel's spade mechanism."""
         if not self.watching_channel:
             return False
-
         try:
-            # Simulate watching by sending minute watched
-            # In real implementation, this would send proper spade events
-            return True
+            return await self.watching_channel.send_watch()
         except Exception as e:
             logger.error(f"Error sending watch: {e}")
             return False
@@ -366,16 +427,10 @@ class TwitchClient:
                 if self.watching_channel and self.current_drop:
                     success = await self.send_watch()
 
-                    if success:
-                        # Update progress (simulated)
-                        if self.current_drop:
-                            self.current_drop.current_minutes += 1
-                            self.update_drop(self.current_drop)
-
-                            # Check if drop is complete
-                            if self.current_drop.is_complete:
-                                await self.claim_drop(self.current_drop)
-                                await self.switch_channel()
+                    if success and self.watching_channel and self.current_drop:
+                        # Android-specific: bump_minutes handles minute tracking and state transitions
+                        self.current_drop.campaign.bump_minutes(self.watching_channel)
+                        self.update_drop(self.current_drop)
 
                 await asyncio.sleep(WATCH_INTERVAL.total_seconds())
 

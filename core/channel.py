@@ -46,8 +46,6 @@ class Stream:
 
     @cached_property
     def _spade_payload(self) -> JsonType:
-        # Android-specific: user_id accessed via self.channel._twitch._auth_state.user_id
-        # This will be wired in S10 once TwitchClient auth state is confirmed
         payload = [
             {
                 "event": "minute-watched",
@@ -61,7 +59,8 @@ class Stream:
                     "logged_in": True,
                     "muted": False,
                     "player": "site",
-                    "user_id": self.channel._twitch._auth_state.user_id,
+                    "user_id": self.channel._twitch.settings.user_id,
+                    # Android-specific: user_id read from settings, not _auth_state
                 }
             }
         ]
@@ -208,9 +207,21 @@ class Channel:
         return self._login
 
     @property
+    def login(self) -> str:
+        """Public accessor for channel login name."""
+        return self._login
+
+    @property
+    def display_name(self) -> str:
+        """Public accessor for display name, falling back to login."""
+        if self._display_name is not None:
+            return self._display_name
+        return self._login
+
+    @property
     def url(self) -> URLType:
-        # Android-specific: CLIENT_URL must be set on TwitchClient
-        return URLType(f"{self._twitch._client_type.CLIENT_URL}/{self._login}")
+        # Android-specific: no client type switching; always uses www.twitch.tv
+        return URLType(f"https://www.twitch.tv/{self._login}")
 
     @property
     def iid(self) -> str:
@@ -284,9 +295,11 @@ class Channel:
         return URLType(match.group(1))
 
     def _check_drops_enabled(self, available_drops: list[JsonType]) -> bool:
+        # Android-specific: inventory is a list, not a dict — use linear search
+        campaigns_by_id = {c.id: c for c in self._twitch.inventory}
         return any(
             (
-                (campaign := self._twitch._campaigns.get(campaign_data["id"])) is not None
+                (campaign := campaigns_by_id.get(campaign_data["id"])) is not None
                 and campaign.can_earn(self, ignore_channel_status=True)
             )
             for campaign_data in available_drops
