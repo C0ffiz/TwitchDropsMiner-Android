@@ -1,239 +1,330 @@
 """Websocket client for Twitch PubSub"""
-import asyncio
+from __future__ import annotations
+
 import json
+import asyncio
 import logging
 from time import time
-from typing import Optional, TYPE_CHECKING
+from contextlib import suppress
+from typing import Any, Literal, TYPE_CHECKING
 
 import aiohttp
 
 from core.constants import WS_URL, PING_INTERVAL, PING_TIMEOUT, MAX_WEBSOCKETS, WS_TOPICS_LIMIT
-from core.utils import create_nonce
-from core.exceptions import WebsocketClosed
+from core.exceptions import MinerException, WebsocketClosed
+from core.utils import (
+    CHARS_ASCII, chunk, task_wrapper, create_nonce,
+    json_minify, format_traceback, AwaitableValue, ExponentialBackoff,
+)
 
 if TYPE_CHECKING:
+    from collections import abc
     from core.twitch_client import TwitchClient
+    from core.constants import JsonType, WebsocketTopic
 
-logger = logging.getLogger("TwitchDrops.websocket")
+WSMsgType = aiohttp.WSMsgType
+logger = logging.getLogger("TwitchDrops")
+ws_logger = logging.getLogger("TwitchDrops.websocket")
 
 
 class Websocket:
     """Single websocket connection."""
 
-    def __init__(self, pool: 'WebsocketPool', index: int):
-        self._pool = pool
-        self._twitch = pool._twitch
-        self._idx = index
-
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self._running = False
-        self._handle_task: Optional[asyncio.Task] = None
-
-        self.topics: dict[str, any] = {}
-
-        # Ping tracking
-        self._next_ping = time()
-        self._max_pong = self._next_ping + PING_TIMEOUT.total_seconds()
+    def __init__(self, pool: WebsocketPool, index: int):
+        self._pool: WebsocketPool = pool
+        self._twitch: TwitchClient = pool._twitch
+        self._state_lock = asyncio.Lock()
+        self._idx: int = index
+        self._ws: AwaitableValue[aiohttp.ClientWebSocketResponse] = AwaitableValue()
+        self._closed = asyncio.Event()
+        self._reconnect_requested = asyncio.Event()
+        self._topics_changed = asyncio.Event()
+        self._next_ping: float = time()
+        self._max_pong: float = self._next_ping + PING_TIMEOUT.total_seconds()
+        self._handle_task: asyncio.Task[None] | None = None
+        self.topics: dict[str, WebsocketTopic] = {}
+        self._submitted: set[WebsocketTopic] = set()
+        self.set_status()  # Android-specific: no GUI
 
     @property
     def connected(self) -> bool:
-        return self._ws is not None and not self._ws.closed
+        return self._ws.has_value()
+
+    def wait_until_connected(self):
+        return self._ws.wait()
+
+    def set_status(self, status: str | None = None, refresh_topics: bool = False) -> None:
+        # Android-specific: no GUI websocket widget — log only
+        if status:
+            ws_logger.debug(f"Websocket[{self._idx}] status: {status}")
+
+    def request_reconnect(self) -> None:
+        self._next_ping = time()
+        self._reconnect_requested.set()
 
     async def start(self):
-        """Start websocket connection."""
-        if self._running:
-            return
+        async with self._state_lock:
+            self.start_nowait()
+            await self.wait_until_connected()
 
-        self._running = True
-        self._handle_task = asyncio.create_task(self._handle())
+    def start_nowait(self):
+        if self._handle_task is None or self._handle_task.done():
+            self._handle_task = asyncio.create_task(self._handle())
 
-    async def stop(self):
-        """Stop websocket connection."""
-        if not self._running:
-            return
+    async def stop(self, *, remove: bool = False):
+        async with self._state_lock:
+            if self._closed.is_set():
+                return
+            self._closed.set()
+            ws = self._ws.get_with_default(None)
+            if ws is not None:
+                self.set_status("disconnecting")
+                await ws.close()
+            if self._handle_task is not None:
+                with suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                    await asyncio.wait_for(self._handle_task, timeout=2)
+                self._handle_task = None
+            if remove:
+                self.topics.clear()
+                self._topics_changed.set()
 
-        self._running = False
+    def stop_nowait(self, *, remove: bool = False):
+        asyncio.create_task(task_wrapper(self.stop)(remove=remove))
 
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-
-        if self._handle_task:
-            self._handle_task.cancel()
-            try:
-                await self._handle_task
-            except asyncio.CancelledError:
-                pass
-
-    async def _handle(self):
-        """Main websocket handler."""
+    async def _backoff_connect(self, ws_url: str, **kwargs):
+        # Android-specific: proxy from settings; exponential backoff on failure
         session = await self._twitch.get_session()
-
-        while self._running:
+        backoff = ExponentialBackoff(**kwargs)
+        proxy = self._twitch.settings.proxy or None
+        for delay in backoff:
             try:
-                async with session.ws_connect(WS_URL) as ws:
-                    self._ws = ws
-                    logger.info(f"Websocket[{self._idx}] connected")
+                async with session.ws_connect(ws_url, proxy=proxy) as websocket:
+                    yield websocket
+                    backoff.reset()
+            except (asyncio.TimeoutError, aiohttp.ClientResponseError, aiohttp.ClientConnectionError):
+                ws_logger.info(f"Websocket[{self._idx}] connection problem (sleep: {round(delay)}s)")
+                await asyncio.sleep(delay)
+            except RuntimeError:
+                ws_logger.warning(f"Websocket[{self._idx}] session closed, exiting backoff loop")
+                break
 
-                    # Subscribe to topics
-                    await self._subscribe_topics()
-
-                    # Main loop
-                    while self._running and not ws.closed:
-                        # Check ping
-                        now = time()
-                        if now >= self._next_ping:
-                            await self._send_ping()
-                            self._next_ping = now + PING_INTERVAL.total_seconds()
-                            self._max_pong = now + PING_TIMEOUT.total_seconds()
-
-                        # Check pong timeout
-                        if now >= self._max_pong:
-                            logger.warning(f"Websocket[{self._idx}] pong timeout")
-                            break
-
-                        # Receive messages
-                        try:
-                            msg = await asyncio.wait_for(ws.receive(), timeout=0.5)
-
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                await self._handle_message(json.loads(msg.data))
-                            elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
-                                break
-
-                        except asyncio.TimeoutError:
-                            continue
-
-            except Exception as e:
-                logger.error(f"Websocket[{self._idx}] error: {e}")
-
-            if self._running:
-                await asyncio.sleep(5)  # Reconnect delay
-
-    async def _send_ping(self):
-        """Send PING message."""
-        if self._ws and not self._ws.closed:
-            await self._ws.send_json({"type": "PING"})
-            logger.debug(f"Websocket[{self._idx}] sent PING")
-
-    async def _subscribe_topics(self):
-        """Subscribe to topics."""
-        if not self.topics or not self._ws:
-            return
-
-        message = {
-            "type": "LISTEN",
-            "nonce": create_nonce("abcdefghijklmnopqrstuvwxyz", 30),
-            "data": {
-                "topics": list(self.topics.keys()),
-                "auth_token": self._twitch.settings.oauth_token
-            }
-        }
-
-        await self._ws.send_json(message)
-        logger.info(f"Websocket[{self._idx}] subscribed to {len(self.topics)} topics")
-
-    async def _handle_message(self, message: dict):
-        """Handle received message."""
-        msg_type = message.get("type")
-
-        if msg_type == "PONG":
-            self._max_pong = self._next_ping
-            logger.debug(f"Websocket[{self._idx}] received PONG")
-
-        elif msg_type == "MESSAGE":
-            data = message.get("data", {})
-            topic = data.get("topic")
-
-            if topic in self.topics:
+    @task_wrapper(critical=True)
+    async def _handle(self):
+        # Android-specific: wait for login; no GUI status calls
+        self.set_status("initializing")
+        await self._twitch.wait_until_login()
+        self.set_status("connecting")
+        ws_logger.info(f"Websocket[{self._idx}] connecting...")
+        self._closed.clear()
+        async for websocket in self._backoff_connect(WS_URL, maximum=180):
+            self._ws.set(websocket)
+            self._reconnect_requested.clear()
+            self.set_status("connected")
+            ws_logger.info(f"Websocket[{self._idx}] connected.")
+            try:
                 try:
-                    payload = json.loads(data.get("message", "{}"))
-                    await self.topics[topic](payload)
-                except Exception as e:
-                    logger.error(f"Error handling topic {topic}: {e}")
+                    while not self._reconnect_requested.is_set():
+                        await self._handle_ping()
+                        await self._handle_topics()
+                        await self._handle_recv()
+                finally:
+                    self._ws.clear()
+                    self._submitted.clear()
+                    self._topics_changed.set()
+            except WebsocketClosed as exc:
+                if exc.received:
+                    ws_logger.warning(
+                        f"Websocket[{self._idx}] closed by server: {websocket.close_code}"
+                    )
+                elif self._closed.is_set():
+                    ws_logger.info(f"Websocket[{self._idx}] stopped.")
+                    self.set_status("disconnected")
+                    return
+            except Exception:
+                ws_logger.exception(f"Exception in Websocket[{self._idx}]")
+            self.set_status("reconnecting")
+            ws_logger.warning(f"Websocket[{self._idx}] reconnecting...")
 
-        elif msg_type == "RESPONSE":
-            error = message.get("error")
-            if error:
-                logger.error(f"Websocket[{self._idx}] error response: {error}")
+    async def _handle_ping(self):
+        now = time()
+        if now >= self._next_ping:
+            self._next_ping = now + PING_INTERVAL.total_seconds()
+            self._max_pong = now + PING_TIMEOUT.total_seconds()
+            await self.send({"type": "PING"})
+        elif now >= self._max_pong:
+            ws_logger.warning(f"Websocket[{self._idx}] no PONG received, reconnecting...")
+            self.request_reconnect()
 
-        elif msg_type == "RECONNECT":
-            logger.warning(f"Websocket[{self._idx}] reconnect requested")
-            if self._ws:
-                await self._ws.close()
+    async def _handle_topics(self):
+        if not self._topics_changed.is_set():
+            return
+        self._topics_changed.clear()
+        self.set_status(refresh_topics=True)
+        # Android-specific: no get_auth() — oauth_token from settings directly
+        auth_token = self._twitch.settings.oauth_token
+        current: set[WebsocketTopic] = set(self.topics.values())
+        removed = self._submitted.difference(current)
+        if removed:
+            for topics in chunk(list(map(str, removed)), 20):
+                await self.send(
+                    {"type": "UNLISTEN", "data": {"topics": topics, "auth_token": auth_token}}
+                )
+            self._submitted.difference_update(removed)
+        added = current.difference(self._submitted)
+        if added:
+            for topics in chunk(list(map(str, added)), 20):
+                await self.send(
+                    {"type": "LISTEN", "data": {"topics": topics, "auth_token": auth_token}}
+                )
+            self._submitted.update(added)
 
-    def add_topic(self, topic: str, handler):
-        """Add a topic to subscribe to."""
-        self.topics[topic] = handler
+    async def _gather_recv(self, messages: list[JsonType], timeout: float = 0.5):
+        ws = self._ws.get_with_default(None)
+        assert ws is not None
+        while True:
+            raw_message: aiohttp.WSMessage = await ws.receive(timeout=timeout)
+            ws_logger.debug(f"Websocket[{self._idx}] received: {raw_message}")
+            if raw_message.type is WSMsgType.TEXT:
+                messages.append(json.loads(raw_message.data))
+            elif raw_message.type is WSMsgType.CLOSE:
+                raise WebsocketClosed(received=True)
+            elif raw_message.type is WSMsgType.CLOSED:
+                raise WebsocketClosed(received=False)
+            elif raw_message.type is WSMsgType.CLOSING:
+                pass
+            elif raw_message.type is WSMsgType.ERROR:
+                ws_logger.error(
+                    f"Websocket[{self._idx}] error: {format_traceback(raw_message.data)}"
+                )
+                raise WebsocketClosed()
+            else:
+                ws_logger.error(f"Websocket[{self._idx}] unknown message: {raw_message}")
+
+    async def _handle_recv(self):
+        messages: list[JsonType] = []
+        with suppress(asyncio.TimeoutError):
+            await self._gather_recv(messages, timeout=0.5)
+        for message in messages:
+            msg_type = message["type"]
+            if msg_type == "MESSAGE":
+                self._handle_message(message)
+            elif msg_type == "PONG":
+                self._max_pong = self._next_ping
+            elif msg_type == "RESPONSE":
+                pass
+            elif msg_type == "RECONNECT":
+                ws_logger.warning(f"Websocket[{self._idx}] reconnect requested.")
+                self.request_reconnect()
+            else:
+                ws_logger.warning(f"Websocket[{self._idx}] unknown payload: {message}")
+
+    def _handle_message(self, message: JsonType) -> None:
+        topic = self.topics.get(message["data"]["topic"])
+        if topic is not None:
+            asyncio.create_task(topic(json.loads(message["data"]["message"])))
+
+    def add_topics(self, topics_set: set[WebsocketTopic]) -> None:
+        changed = False
+        while topics_set and len(self.topics) < WS_TOPICS_LIMIT:
+            topic = topics_set.pop()
+            self.topics[str(topic)] = topic
+            changed = True
+        if changed:
+            self._topics_changed.set()
+
+    def remove_topics(self, topics_set: set[str]) -> None:
+        existing = topics_set.intersection(self.topics.keys())
+        if not existing:
+            return
+        topics_set.difference_update(existing)
+        for topic in existing:
+            del self.topics[topic]
+        self._topics_changed.set()
+
+    async def send(self, message: JsonType) -> None:
+        ws = self._ws.get_with_default(None)
+        assert ws is not None
+        if message["type"] != "PING":
+            message["nonce"] = create_nonce(CHARS_ASCII, 30)
+        await ws.send_json(message, dumps=json_minify)
+        ws_logger.debug(f"Websocket[{self._idx}] sent: {message}")
 
 
 class WebsocketPool:
-    """Pool of websocket connections."""
+    """Pool of websocket connections managing topic distribution."""
 
-    def __init__(self, twitch: 'TwitchClient'):
-        self._twitch = twitch
+    def __init__(self, twitch: TwitchClient):
+        self._twitch: TwitchClient = twitch
+        self._running = asyncio.Event()
         self.websockets: list[Websocket] = []
-        self._running = False
+
+    @property
+    def running(self) -> bool:
+        return self._running.is_set()
+
+    def wait_until_connected(self) -> abc.Coroutine[Any, Any, Literal[True]]:
+        return self._running.wait()
 
     async def start(self):
-        """Start websocket pool."""
-        if self._running:
+        self._running.set()
+        await asyncio.gather(*(ws.start() for ws in self.websockets))
+
+    async def stop(self, *, clear_topics: bool = False):
+        self._running.clear()
+        await asyncio.gather(*(ws.stop(remove=clear_topics) for ws in self.websockets))
+
+    def add_topics(self, topics: abc.Iterable[WebsocketTopic]) -> None:
+        topics_set = set(topics)
+        if not topics_set:
             return
-
-        self._running = True
-
-        # Create initial websocket
-        ws = Websocket(self, 0)
-        self.websockets.append(ws)
-
-        # Add user topics
-        if self._twitch.settings.user_id:
-            user_id = self._twitch.settings.user_id
-            ws.add_topic(f"user-drop-events.{user_id}", self._handle_drop_event)
-
-        await ws.start()
-
-    async def stop(self):
-        """Stop websocket pool."""
-        if not self._running:
+        if self.websockets:
+            topics_set.difference_update(*(ws.topics.values() for ws in self.websockets))
+        if not topics_set:
             return
+        for ws_idx in range(MAX_WEBSOCKETS):
+            if ws_idx < len(self.websockets):
+                ws = self.websockets[ws_idx]
+            else:
+                ws = Websocket(self, ws_idx)
+                if self.running:
+                    ws.start_nowait()
+                self.websockets.append(ws)
+            ws.add_topics(topics_set)
+            if not topics_set:
+                return
+        raise MinerException("Maximum websocket topics limit has been reached")
 
-        self._running = False
-
+    def remove_topics(self, topics: abc.Iterable[str]) -> None:
+        topics_set = set(topics)
+        if not topics_set:
+            return
         for ws in self.websockets:
-            await ws.stop()
+            ws.remove_topics(topics_set)
+        while len(self.websockets) > 1 and not self.websockets[-1].topics:
+            last_ws = self.websockets.pop()
+            last_ws.stop_nowait(remove=True)
 
-        self.websockets.clear()
-
-    async def _handle_drop_event(self, payload: dict):
-        """Handle drop progress event."""
+    async def _handle_drop_event(self, payload: dict) -> None:
         try:
             event_type = payload.get("type")
-
             if event_type == "drop-progress":
                 drop_id = payload.get("drop_id")
                 current_minutes = payload.get("current_minutes", 0)
-                required_minutes = payload.get("required_minutes", 0)
-
-                logger.info(f"Drop progress: {drop_id} - {current_minutes}/{required_minutes}")
-
-                # Update drop in inventory
+                ws_logger.info(f"Drop progress: {drop_id} \u2014 {current_minutes} min")
                 for campaign in self._twitch.inventory:
                     drop = campaign.get_drop(drop_id)
                     if drop:
-                        drop.current_minutes = current_minutes
+                        # Android-specific: current_minutes is @property — use method
+                        drop.update_real_minutes(current_minutes)
                         self._twitch.update_drop(drop)
                         break
-
             elif event_type == "drop-claim":
                 drop_id = payload.get("drop_id")
-                logger.info(f"Drop ready to claim: {drop_id}")
-
-                # Find and claim drop
+                ws_logger.info(f"Drop ready to claim: {drop_id}")
                 for campaign in self._twitch.inventory:
                     drop = campaign.get_drop(drop_id)
                     if drop and not drop.is_claimed:
                         await self._twitch.claim_drop(drop)
                         break
-
         except Exception as e:
-            logger.error(f"Error handling drop event: {e}")
+            ws_logger.error(f"Error handling drop event: {e}")
