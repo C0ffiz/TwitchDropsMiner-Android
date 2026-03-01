@@ -303,28 +303,3 @@ class WebsocketPool:
         while len(self.websockets) > 1 and not self.websockets[-1].topics:
             last_ws = self.websockets.pop()
             last_ws.stop_nowait(remove=True)
-
-    async def _handle_drop_event(self, payload: dict) -> None:
-        try:
-            event_type = payload.get("type")
-            if event_type == "drop-progress":
-                drop_id = payload.get("drop_id")
-                current_minutes = payload.get("current_minutes", 0)
-                ws_logger.info(f"Drop progress: {drop_id} \u2014 {current_minutes} min")
-                for campaign in self._twitch.inventory:
-                    drop = campaign.get_drop(drop_id)
-                    if drop:
-                        # Android-specific: current_minutes is @property — use method
-                        drop.update_real_minutes(current_minutes)
-                        self._twitch.update_drop(drop)
-                        break
-            elif event_type == "drop-claim":
-                drop_id = payload.get("drop_id")
-                ws_logger.info(f"Drop ready to claim: {drop_id}")
-                for campaign in self._twitch.inventory:
-                    drop = campaign.get_drop(drop_id)
-                    if drop and not drop.is_claimed:
-                        await self._twitch.claim_drop(drop)
-                        break
-        except Exception as e:
-            ws_logger.error(f"Error handling drop event: {e}")
