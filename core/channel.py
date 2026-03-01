@@ -34,6 +34,16 @@ class Channel:
         return self.id
 
     @classmethod
+    def from_acl(cls, twitch: 'TwitchClient', data: dict) -> 'Channel':
+        """Create a channel from an ACL (allow-list) entry in a drops campaign."""
+        return cls(
+            twitch,
+            int(data["id"]),
+            data["name"],
+            data.get("displayName") or data["name"],
+        )
+
+    @classmethod
     def from_directory(cls, twitch: 'TwitchClient', data: dict) -> 'Channel':
         """Create channel from directory data."""
         broadcaster = data["broadcaster"]

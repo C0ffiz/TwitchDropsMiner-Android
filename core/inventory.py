@@ -11,6 +11,7 @@ from functools import cached_property
 from datetime import datetime, timedelta, timezone
 
 from core.translate import _
+from core.channel import Channel  # runtime import: used in Channel.from_acl() call
 from core.utils import timestamp, Game
 from core.exceptions import GQLException
 from core.constants import GQL_OPERATIONS, MAX_EXTRA_MINUTES, URLType, State
@@ -19,7 +20,6 @@ if TYPE_CHECKING:
     from collections import abc
 
     from core.twitch_client import TwitchClient
-    from core.channel import Channel
     from core.constants import JsonType
 
 
