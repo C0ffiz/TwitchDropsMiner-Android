@@ -2,22 +2,32 @@
 import asyncio
 import logging
 import json
-from contextlib import asynccontextmanager
+from time import time
+from copy import deepcopy
+from collections import deque, OrderedDict
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Callable, Any
+from typing import Optional, Any, NoReturn, TYPE_CHECKING
 
 import aiohttp
 
 from core.constants import (
-    CLIENT_ID, USER_AGENT, GQL_URL, GQL_OPERATIONS,
-    State, PriorityMode, WATCH_INTERVAL
+    CALL, MAX_INT, CLIENT_ID, USER_AGENT, GQL_URL, GQL_OPERATIONS,
+    State, PriorityMode, WATCH_INTERVAL, WebsocketTopic, MAX_CHANNELS,
 )
 from core.exceptions import (
     MinerException, LoginException, GQLException,
     CaptchaRequired, ExitRequest
 )
-from core.utils import create_nonce, timestamp, Game, AwaitableValue, ExponentialBackoff
+from core.utils import (
+    create_nonce, timestamp, Game, AwaitableValue,
+    ExponentialBackoff, RateLimiter, chunk, task_wrapper,
+)
 from core.settings import Settings
+
+if TYPE_CHECKING:
+    from core.constants import JsonType
+
 from core.websocket_client import WebsocketPool
 from core.inventory import DropsCampaign, TimedDrop
 from core.channel import Channel
@@ -51,22 +61,37 @@ class TwitchClient:
         self.state = State.IDLE
         self._running = False
         self._session: Optional[aiohttp.ClientSession] = None
-        self._logged_in = AwaitableValue()
+        self._logged_in: AwaitableValue = AwaitableValue()
+        self._state_change = asyncio.Event()  # Android-specific
+
+        # Watch control
+        self._watching_restart = asyncio.Event()  # Android-specific
 
         # Data
         self.inventory: list[DropsCampaign] = []
-        self.channels: dict[str, Channel] = {}
-        self.watching_channel: Optional[Channel] = None
+        self.channels: dict[int, Channel] = {}  # keyed by channel id
+        self.watching_channel: AwaitableValue = AwaitableValue()  # Android-specific: was Optional[Channel]
         self.current_drop: Optional[TimedDrop] = None
         self.games: set[Game] = set()
         self.notifications = _NotificationsShim(self)  # Android-specific
 
-        # Websocket
-        self.websocket_pool: Optional[WebsocketPool] = None
+        # Drop tracking (Android-specific: flat dicts for fast lookup)
+        self._drops: dict[str, TimedDrop] = {}
+        self._campaigns: dict[str, DropsCampaign] = {}
+
+        # Game priority list
+        self.wanted_games: list[Game] = []
+
+        # Android-specific: renamed from websocket_pool to websocket
+        self.websocket: Optional[WebsocketPool] = None
 
         # Tasks
         self._watch_task: Optional[asyncio.Task] = None
-        self._maintenance_task: Optional[asyncio.Task] = None
+        self._mnt_task: Optional[asyncio.Task] = None  # Android-specific: was _maintenance_task
+        self._mnt_triggers: deque = deque()  # Android-specific
+
+        # GQL rate limiter (5 requests per second)
+        self._gql_limiter = RateLimiter(capacity=5, window=1)  # Android-specific
 
     # ========================================================================
     # CALLBACKS
@@ -89,15 +114,16 @@ class TwitchClient:
         self._callback('on_status', status)
 
     def change_state(self, state: State) -> None:
-        """
-        Update miner state, triggering state-transition logic.
-        Android-specific: CHANNEL_SWITCH schedules async switch on next loop iteration
-        """
-        self.state = state
-        if state == State.CHANNEL_SWITCH:
-            asyncio.get_event_loop().call_soon(
-                lambda: asyncio.ensure_future(self.switch_channel())
-            )
+        """Update miner state and signal the state machine."""
+        # Android-specific: EXIT state is terminal — prevent further changes
+        if self.state is not State.EXIT:
+            self.state = state
+        self._state_change.set()
+
+    def close(self) -> None:
+        """Request application exit. Called by task_wrapper on critical failures."""
+        # Android-specific: signals the state machine to exit cleanly
+        self.change_state(State.EXIT)
 
     def update_progress(self, current: int, total: int):
         """Update progress in UI."""
@@ -162,15 +188,29 @@ class TwitchClient:
     # GQL REQUESTS
     # ========================================================================
 
-    async def gql_request(self, operation: dict) -> dict:
-        """Make a GraphQL request to Twitch."""
+    async def gql_request(self, operation):
+        """
+        Make a GraphQL request to Twitch.
+        Accepts a single operation dict or a list of operation dicts (batch).
+        Returns a dict for single requests, or a list of dicts for batch requests.
+        """
         session = await self.get_session()
 
-        payload = {
-            "operationName": operation["operationName"],
-            "extensions": operation["extensions"],
-            "variables": operation.get("variables", {})
-        }
+        if isinstance(operation, list):
+            payload = [
+                {
+                    "operationName": op["operationName"],
+                    "extensions": op["extensions"],
+                    "variables": op.get("variables", {}),
+                }
+                for op in operation
+            ]
+        else:
+            payload = {
+                "operationName": operation["operationName"],
+                "extensions": operation["extensions"],
+                "variables": operation.get("variables", {}),
+            }
 
         try:
             async with session.post(GQL_URL, json=payload) as response:
@@ -179,11 +219,15 @@ class TwitchClient:
 
                 data = await response.json()
 
-                if "errors" in data:
-                    error_msg = data["errors"][0]["message"]
-                    raise GQLException(error_msg)
-
-                return data
+                if isinstance(data, list):
+                    for item in data:
+                        if "errors" in item:
+                            raise GQLException(item["errors"][0]["message"])
+                    return data
+                else:
+                    if "errors" in data:
+                        raise GQLException(data["errors"][0]["message"])
+                    return data
         except aiohttp.ClientError as e:
             raise MinerException(f"Network error: {e}")
 
@@ -245,38 +289,129 @@ class TwitchClient:
     # INVENTORY & CAMPAIGNS
     # ========================================================================
 
-    async def fetch_inventory(self):
-        """Fetch drops inventory and campaigns."""
+    def _merge_data(self, primary: "JsonType", secondary: "JsonType") -> "JsonType":
+        """Merge two JsonType dicts, primary values take precedence."""
+        from itertools import chain as _chain
+        merged = {}
+        for key in set(_chain(primary.keys(), secondary.keys())):
+            in_primary = key in primary
+            if in_primary and key in secondary:
+                vp, vs = primary[key], secondary[key]
+                if isinstance(vp, dict) and isinstance(vs, dict):
+                    merged[key] = self._merge_data(vp, vs)
+                else:
+                    merged[key] = vp
+            elif in_primary:
+                merged[key] = primary[key]
+            else:
+                merged[key] = secondary[key]
+        return merged
+
+    async def fetch_campaigns(
+        self, campaigns_chunk: list[tuple[str, "JsonType"]]
+    ) -> dict[str, "JsonType"]:
+        """Fetch detailed campaign data for a chunk of campaign IDs."""
+        campaign_ids: dict[str, "JsonType"] = dict(campaigns_chunk)
+        response_list: list["JsonType"] = await self.gql_request([
+            GQL_OPERATIONS["CampaignDetails"].with_variables(
+                {"channelLogin": str(self.settings.user_id), "dropID": cid}
+            )
+            for cid in campaign_ids
+        ])
+        fetched: dict[str, "JsonType"] = {
+            (cd := r["data"]["user"]["dropCampaign"])["id"]: cd
+            for r in response_list
+        }
+        return self._merge_data(campaign_ids, fetched)
+
+    async def fetch_inventory(self) -> None:
+        """
+        Fetch inventory and campaigns using the full upstream 3-step GQL flow.
+        # Android-specific: no GUI calls; uses update_status/print callbacks
+        """
         self.print("Fetching inventory...")
         self.update_status("Fetching inventory...")
         self.state = State.INVENTORY_FETCH
 
+        # Step 1: fetch in-progress campaigns (inventory)
+        response = await self.gql_request(GQL_OPERATIONS["Inventory"])
+        inventory_json: "JsonType" = response["data"]["currentUser"]["inventory"]
+        ongoing: list["JsonType"] = inventory_json["dropCampaignsInProgress"] or []
+        claimed_benefits: dict[str, Any] = {
+            b["id"]: timestamp(b["lastAwardedAt"])
+            for b in inventory_json["gameEventDrops"]
+        }
+        inventory_data: dict[str, "JsonType"] = {c["id"]: c for c in ongoing}
+
+        # Step 2: fetch available campaigns
+        response = await self.gql_request(GQL_OPERATIONS["Campaigns"])
+        available_list: list["JsonType"] = (
+            response["data"]["currentUser"]["dropCampaigns"] or []
+        )
+        available_campaigns: dict[str, "JsonType"] = {
+            c["id"]: c
+            for c in available_list
+            if c["status"] in ("ACTIVE", "UPCOMING")
+        }
+
+        # Step 3: fetch campaign details in chunks
+        self.update_status("Fetching campaign details...")
+        fetch_tasks = [
+            asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
+            for campaigns_chunk in chunk(list(available_campaigns.items()), 20)
+        ]
         try:
-            response = await self.gql_request(GQL_OPERATIONS["GetDropCampaigns"])
-
-            if "data" not in response:
-                raise MinerException("Invalid inventory response")
-
-            campaigns_data = response["data"].get("currentUser", {}).get("dropCampaigns", [])
-
-            self.inventory.clear()
-            self.games.clear()
-
-            for campaign_data in campaigns_data:
-                try:
-                    campaign = DropsCampaign(self, campaign_data)
-                    self.inventory.append(campaign)
-                    self.games.add(campaign.game)
-                except Exception as e:
-                    logger.error(f"Error parsing campaign: {e}")
-
-            self.print(f"Found {len(self.inventory)} campaigns")
-            self.update_inventory()
-            self.update_status(f"Loaded {len(self.inventory)} campaigns")
-
-        except Exception as e:
-            self.print(f"Error fetching inventory: {e}")
+            for coro in asyncio.as_completed(fetch_tasks):
+                chunk_data = await coro
+                inventory_data = self._merge_data(inventory_data, chunk_data)
+        except Exception:
+            for task in fetch_tasks:
+                task.cancel()
             raise
+
+        # Filter invalid campaigns (no game)
+        for cid in list(inventory_data.keys()):
+            if inventory_data[cid].get("game") is None:
+                del inventory_data[cid]
+
+        # Build campaign objects
+        campaigns: list[DropsCampaign] = [
+            DropsCampaign(self, cdata, claimed_benefits)
+            for cdata in inventory_data.values()
+        ]
+        campaigns.sort(key=lambda c: c.active, reverse=True)
+        campaigns.sort(key=lambda c: c.upcoming and c.starts_at or c.ends_at)
+        campaigns.sort(key=lambda c: c.eligible, reverse=True)
+
+        # Update internal state
+        self._drops.clear()
+        self.inventory.clear()
+        self._campaigns.clear()
+        self._mnt_triggers.clear()
+
+        switch_triggers: set = set()
+        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        for campaign in campaigns:
+            self._drops.update({drop.id: drop for drop in campaign.drops})
+            self._campaigns[campaign.id] = campaign
+            if campaign.can_earn_within(next_hour):
+                switch_triggers.update(campaign.time_triggers)
+            self.inventory.append(campaign)
+
+        self._mnt_triggers.extend(sorted(switch_triggers))
+        # Trim past triggers
+        now = datetime.now(timezone.utc)
+        while self._mnt_triggers and self._mnt_triggers[0] <= now:
+            self._mnt_triggers.popleft()
+
+        # Restart maintenance task
+        if self._mnt_task is not None and not self._mnt_task.done():
+            self._mnt_task.cancel()
+        self._mnt_task = asyncio.create_task(self._maintenance_task())
+
+        self.print(f"Loaded {len(self.inventory)} campaigns")
+        self.update_inventory()
+        self.update_status(f"Loaded {len(self.inventory)} campaigns")
 
     def get_active_campaign(self) -> Optional[DropsCampaign]:
         """Get the currently active campaign to mine."""
@@ -305,6 +440,118 @@ class TwitchClient:
 
         return available[0] if available else None
 
+    @task_wrapper(critical=True)
+    async def _maintenance_task(self) -> None:
+        """
+        Periodic maintenance: triggers CHANNELS_CLEANUP and INVENTORY_FETCH.
+        # Android-specific: no GUI progress; uses logger only
+        """
+        now = datetime.now(timezone.utc)
+        next_period = now + timedelta(minutes=30)
+        while True:
+            now = datetime.now(timezone.utc)
+            if now >= next_period:
+                break
+            next_trigger = next_period
+            while self._mnt_triggers and self._mnt_triggers[0] <= next_trigger:
+                next_trigger = self._mnt_triggers.popleft()
+            logger.log(
+                CALL,
+                f"Maintenance waiting until: {next_trigger.astimezone().strftime('%X')}"
+            )
+            await asyncio.sleep((next_trigger - now).total_seconds())
+            now = datetime.now(timezone.utc)
+            if now >= next_period:
+                break
+            if next_trigger != next_period:
+                logger.log(CALL, "Maintenance: requesting channels cleanup")
+                self.change_state(State.CHANNELS_CLEANUP)
+        logger.log(CALL, "Maintenance: requesting inventory reload")
+        self.change_state(State.INVENTORY_FETCH)
+
+    async def get_live_streams(
+        self, game: Game, *, limit: int = 20, drops_enabled: bool = True
+    ) -> list[Channel]:
+        """Fetch live channels for a game via GQL GameDirectory."""
+        filters = ["DROPS_ENABLED"] if drops_enabled else []
+        try:
+            response = await self.gql_request(
+                GQL_OPERATIONS["GameDirectory"].with_variables({
+                    "limit": limit,
+                    "slug": game.slug,
+                    "options": {
+                        "includeRestricted": ["SUB_ONLY_LIVE"],
+                        "systemFilters": filters,
+                    },
+                })
+            )
+        except GQLException as exc:
+            raise MinerException(f"Game: {game.slug}") from exc
+        if "game" in response["data"]:
+            return [
+                Channel.from_directory(self, edge["node"], drops_enabled=drops_enabled)
+                for edge in response["data"]["game"]["streams"]["edges"]
+                if edge["node"]["broadcaster"] is not None
+            ]
+        return []
+
+    async def bulk_check_online(self, channels: list[Channel]) -> None:
+        """
+        Batch GQL check for online status of ACL channels.
+        # Android-specific: no GUI; uses channel.external_update()
+        """
+        stream_gql_ops = [channel.stream_gql for channel in channels]
+        if not stream_gql_ops:
+            return
+        acl_streams_map: dict[int, Any] = {}
+        stream_tasks = [
+            asyncio.create_task(self.gql_request(stream_chunk))
+            for stream_chunk in chunk(stream_gql_ops, 20)
+        ]
+        try:
+            for coro in asyncio.as_completed(stream_tasks):
+                response_list = await coro
+                for resp in response_list:
+                    cd = resp["data"]["user"]
+                    if cd is not None:
+                        acl_streams_map[int(cd["id"])] = cd
+        except Exception:
+            for task in stream_tasks:
+                task.cancel()
+            raise
+        # Check available drops for online channels
+        acl_drops_map: dict[int, list] = {}
+        if self.settings.available_drops_check:
+            avail_ops = [
+                GQL_OPERATIONS["AvailableDrops"].with_variables(
+                    {"channelID": str(cid)}
+                )
+                for cid, cd in acl_streams_map.items()
+                if cd["stream"] is not None
+            ]
+            avail_tasks = [
+                asyncio.create_task(self.gql_request(avail_chunk))
+                for avail_chunk in chunk(avail_ops, 20)
+            ]
+            try:
+                for coro in asyncio.as_completed(avail_tasks):
+                    response_list = await coro
+                    for resp in response_list:
+                        ai = resp["data"]["channel"]
+                        acl_drops_map[int(ai["id"])] = ai["viewerDropCampaigns"] or []
+            except Exception:
+                for task in avail_tasks:
+                    task.cancel()
+                raise
+        for channel in channels:
+            cid = channel.id
+            if cid not in acl_streams_map:
+                continue
+            cd = acl_streams_map[cid]
+            if cd["stream"] is None:
+                continue
+            channel.external_update(cd, acl_drops_map.get(cid, []))
+
     # ========================================================================
     # CHANNELS
     # ========================================================================
@@ -331,7 +578,7 @@ class TwitchClient:
                 if node and node.get("broadcaster"):
                     channel = Channel.from_directory(self, node)
                     channels.append(channel)
-                    self.channels[channel.login] = channel
+                    self.channels[channel.id] = channel
 
             return channels
 
@@ -407,7 +654,174 @@ class TwitchClient:
             self.update_drop(self.current_drop)
 
     # ========================================================================
+    # CHANNEL PRIORITY & WATCHING
+    # ========================================================================
+
+    def get_priority(self, channel: Channel) -> int:
+        """Priority index of channel's game; MAX_INT = not wanted."""
+        game = channel.game
+        if game is None or game not in self.wanted_games:
+            return MAX_INT
+        return self.wanted_games.index(game)
+
+    @staticmethod
+    def _viewers_key(channel: Channel) -> int:
+        viewers = channel.viewers
+        return viewers if viewers is not None else -1
+
+    def can_watch(self, channel: Channel) -> bool:
+        """True if this channel qualifies as a watching candidate."""
+        if not channel.online:
+            return False
+        for campaign in self.inventory:
+            if campaign.can_earn(channel) and (
+                channel.game is not None
+                and channel.drops_enabled
+                and channel.game in self.wanted_games
+                or campaign.game.is_special_events()
+            ):
+                return True
+        return False
+
+    def should_switch(self, channel: Channel) -> bool:
+        """True if channel is a better watching candidate than current."""
+        watching = self.watching_channel.get_with_default(None)
+        if watching is None:
+            return True
+        ch_order = self.get_priority(channel)
+        wt_order = self.get_priority(watching)
+        return (
+            ch_order < wt_order
+            or ch_order == wt_order
+            and channel.acl_based > watching.acl_based
+        )
+
+    def watch(self, channel: Channel, *, update_status: bool = True) -> None:
+        """Set the channel being watched."""
+        self.watching_channel.set(channel)
+        self.update_channel(channel.display_name)
+        if update_status:
+            self.print(f"Watching: {channel.name}")
+            self.update_status(f"Watching: {channel.name}")
+
+    def stop_watching(self) -> None:
+        """Stop watching the current channel."""
+        self.watching_channel.clear()
+        self.update_channel("")
+        self.update_drop(None)
+
+    def restart_watching(self) -> None:
+        """Interrupt watch sleep to restart immediately."""
+        # Android-specific: sets event that _watch_sleep awaits
+        self._watching_restart.set()
+
+    # ========================================================================
     # WATCHING & MINING
+    # ========================================================================
+
+    # ========================================================================
+    # PUBSUB HANDLERS
+    # ========================================================================
+
+    @task_wrapper
+    async def process_stream_state(self, channel_id: int, message: "JsonType") -> None:
+        """Handle PubSub StreamState messages (stream-up, stream-down, viewcount)."""
+        msg_type = message["type"]
+        channel = self.channels.get(channel_id)
+        if channel is None:
+            logger.error(f"Stream state change for unknown channel: {channel_id}")
+            return
+        if msg_type == "viewcount":
+            if not channel.online:
+                channel.check_online()
+            else:
+                channel.viewers = message["viewers"]
+                channel.display()
+        elif msg_type == "stream-down":
+            channel.set_offline()
+        elif msg_type == "stream-up":
+            channel.check_online()
+        elif msg_type == "commercial":
+            pass  # skip
+        else:
+            logger.warning(f"Unknown stream state: {msg_type}")
+
+    @task_wrapper
+    async def process_stream_update(self, channel_id: int, message: "JsonType") -> None:
+        """Handle PubSub StreamUpdate messages (title/game changes)."""
+        channel = self.channels.get(channel_id)
+        if channel is None:
+            logger.error(f"Broadcast settings update for unknown channel: {channel_id}")
+            return
+        if message["old_game"] != message["game"]:
+            logger.info(
+                f"Channel update: {channel.name}, game: "
+                f"{message['old_game']} -> {message['game']}"
+            )
+        # Use check_online to delay and coalesce multiple rapid updates
+        channel.check_online()
+
+    @task_wrapper
+    async def process_drops(self, user_id: int, message: "JsonType") -> None:
+        """Handle PubSub User/Drops messages (drop-progress, drop-claim)."""
+        msg_type: str = message["type"]
+        if msg_type not in ("drop-progress", "drop-claim"):
+            return
+        drop_id: str = message["data"]["drop_id"]
+        drop = self._drops.get(drop_id)
+        watching = self.watching_channel.get_with_default(None)
+        if msg_type == "drop-claim":
+            if drop is None:
+                logger.error(f"Drop claim for unknown drop: {drop_id}")
+                return
+            drop.update_claim(message["data"]["drop_instance_id"])
+            campaign = drop.campaign
+            await drop.claim()
+            drop.display()
+            await asyncio.sleep(4)
+            if watching is not None:
+                for _ in range(8):
+                    ctx = await self.gql_request(
+                        GQL_OPERATIONS["CurrentDrop"].with_variables(
+                            {"channelID": str(watching.id)}
+                        )
+                    )
+                    drop_data = ctx["data"]["currentUser"]["dropCurrentSession"]
+                    if drop_data is None or drop_data["dropID"] != drop.id:
+                        break
+                    await asyncio.sleep(2)
+            if campaign.can_earn(watching):
+                self.restart_watching()
+            else:
+                self.change_state(State.INVENTORY_FETCH)
+            return
+        # drop-progress
+        if drop is not None and drop.can_earn(watching):
+            drop.update_minutes(message["data"]["current_progress_min"])
+            logger.log(
+                CALL,
+                f"{drop.campaign.game} | {drop.name}: "
+                f"{drop.current_minutes}/{drop.required_minutes}"
+            )
+
+    @task_wrapper
+    async def process_notifications(self, user_id: int, message: "JsonType") -> None:
+        """Handle PubSub User/Notifications messages."""
+        if message["type"] == "create-notification":
+            data = message["data"]["notification"]
+            if data["type"] in (
+                "user_drop_reward_reminder_notification",
+                "quests_viewer_reward_campaign_earned_emote",
+            ):
+                self.change_state(State.INVENTORY_FETCH)
+                await self.gql_request(
+                    GQL_OPERATIONS["NotificationsDelete"].with_variables(
+                        {"input": {"id": data["id"]}}
+                    )
+                )
+
+    # ========================================================================
+    # WATCHING (continued)
     # ========================================================================
 
     async def send_watch(self) -> bool:
@@ -420,7 +834,7 @@ class TwitchClient:
             logger.error(f"Error sending watch: {e}")
             return False
 
-    async def watch_loop(self):
+    async def _watch_loop(self):
         """Main watching loop."""
         while self._running:
             try:
@@ -466,42 +880,46 @@ class TwitchClient:
     # ========================================================================
 
     async def start(self):
-        """Start the miner."""
+        """Start the miner — login, inventory, websocket, watch loop."""
         if self._running:
             return
-
         self._running = True
         self.print("Starting TwitchDropsMiner...")
 
         try:
-            # Login
             if not self.is_logged_in():
                 await self.login()
 
-            # Fetch inventory
             await self.fetch_inventory()
 
-            # Start websocket
-            self.websocket_pool = WebsocketPool(self)
-            await self.websocket_pool.start()
+            # Android-specific: renamed from websocket_pool to websocket
+            self.websocket = WebsocketPool(self)
+            await self.websocket.start()
 
-            # Select initial channel
-            await self.switch_channel()
+            # Subscribe to user-level PubSub topics
+            user_id = self.settings.user_id
+            if user_id:
+                self.websocket.add_topics([
+                    WebsocketTopic("User", "Drops", user_id, self.process_drops),
+                    WebsocketTopic(
+                        "User", "Notifications", user_id, self.process_notifications
+                    ),
+                ])
 
-            # Start watch loop
-            self._watch_task = asyncio.create_task(self.watch_loop())
+            self._watch_task = asyncio.create_task(self._watch_loop())
+            self.change_state(State.GAMES_UPDATE)
 
-            self.print("Miner started successfully")
+            self.print("Miner started")
             self.update_status("Running")
 
         except Exception as e:
-            self.print(f"Error starting miner: {e}")
+            self.print(f"Error starting: {e}")
             self.update_status("Error")
             await self.stop()
             raise
 
     async def stop(self):
-        """Stop the miner."""
+        """Stop the miner cleanly."""
         if not self._running:
             return
 
@@ -509,21 +927,20 @@ class TwitchClient:
         self.print("Stopping miner...")
         self.update_status("Stopping...")
 
-        # Cancel tasks
         if self._watch_task:
             self._watch_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._watch_task
-            except asyncio.CancelledError:
-                pass
 
-        # Stop websocket
-        if self.websocket_pool:
-            await self.websocket_pool.stop()
+        if self._mnt_task:
+            self._mnt_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._mnt_task
 
-        # Close session
+        if self.websocket:
+            await self.websocket.stop(clear_topics=True)
+
         await self.close_session()
-
         self.print("Miner stopped")
         self.update_status("Stopped")
 
