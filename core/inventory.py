@@ -1,216 +1,500 @@
 """Inventory and drops management"""
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from __future__ import annotations
+
+import re
+import math
+import logging
+from enum import Enum
+from itertools import chain
+from typing import TYPE_CHECKING
+from functools import cached_property
+from datetime import datetime, timedelta, timezone
+
+from core.translate import _
 from core.utils import timestamp, Game
+from core.exceptions import GQLException
+from core.constants import GQL_OPERATIONS, MAX_EXTRA_MINUTES, URLType, State
 
 if TYPE_CHECKING:
+    from collections import abc
+
     from core.twitch_client import TwitchClient
     from core.channel import Channel
+    from core.constants import JsonType
+
+
+logger = logging.getLogger("TwitchDrops")
+DIMS_PATTERN = re.compile(r'-\d+x\d+(?=\.(?:jpg|png|gif)$)', re.I)
+
+
+def remove_dimensions(url: URLType) -> URLType:
+    return URLType(DIMS_PATTERN.sub('', url))
+
+
+class BenefitType(Enum):
+    UNKNOWN = "UNKNOWN"
+    BADGE = "BADGE"
+    EMOTE = "EMOTE"
+    DIRECT_ENTITLEMENT = "DIRECT_ENTITLEMENT"
+
+    def is_badge_or_emote(self) -> bool:
+        return self in (BenefitType.BADGE, BenefitType.EMOTE)
 
 
 class Benefit:
-    """Represents a drop benefit/reward."""
+    __slots__ = ("id", "name", "type", "image_url")
 
-    def __init__(self, data: dict):
-        benefit_data = data["benefit"]
-        self.id = benefit_data["id"]
-        self.name = benefit_data["name"]
-        self.image_url = benefit_data.get("imageAssetURL", "")
+    def __init__(self, data: JsonType):
+        benefit_data: JsonType = data["benefit"]
+        self.id: str = benefit_data["id"]
+        self.name: str = benefit_data["name"]
+        self.type: BenefitType = (
+            BenefitType(benefit_data["distributionType"])
+            if benefit_data["distributionType"] in BenefitType.__members__.keys()
+            else BenefitType.UNKNOWN
+        )
+        self.image_url: URLType = benefit_data["imageAssetURL"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
-class TimedDrop:
-    """Represents a timed drop."""
+class BaseDrop:
+    def __init__(
+        self, campaign: DropsCampaign, data: JsonType, claimed_benefits: dict[str, datetime]
+    ):
+        self._twitch: TwitchClient = campaign._twitch
+        self.id: str = data["id"]
+        self.name: str = data["name"]
+        self.campaign: DropsCampaign = campaign
+        self.benefits: list[Benefit] = [Benefit(b) for b in (data["benefitEdges"] or [])]
+        self.starts_at: datetime = timestamp(data["startAt"])
+        self.ends_at: datetime = timestamp(data["endAt"])
+        self.claim_id: str | None = None
+        self.is_claimed: bool = False
+        bugged_time = datetime(1, 1, 1, 0, 0, tzinfo=timezone.utc)
+        if "self" in data:
+            self.claim_id = data["self"]["dropInstanceID"]
+            self.is_claimed = data["self"]["isClaimed"]
+        elif (
+            (
+                dts := [
+                    claimed_benefits[bid]
+                    for benefit in self.benefits
+                    if (bid := benefit.id) in claimed_benefits
+                ]
+            )
+            and all((self.starts_at <= dt < self.ends_at) | (dt == bugged_time) for dt in dts)
+        ):
+            self.is_claimed = True
+        self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
-    def __init__(self, campaign: 'DropsCampaign', data: dict):
-        self._twitch = campaign._twitch
-        self.campaign = campaign
-
-        self.id = data["id"]
-        self.name = data["name"]
-        self.benefits = [Benefit(b) for b in (data.get("benefitEdges") or [])]
-
-        self.starts_at = timestamp(data["startAt"])
-        self.ends_at = timestamp(data["endAt"])
-
-        self.required_minutes = data.get("requiredMinutesWatched", 0)
-        self.current_minutes = 0
-
-        self.claim_id: Optional[str] = None
-        self.is_claimed = False
-
-        # Parse self edge if available
-        if "self" in data and data["self"]:
-            self_data = data["self"]
-            self.claim_id = self_data.get("dropInstanceID")
-            self.is_claimed = self_data.get("isClaimed", False)
-            self.current_minutes = self_data.get("currentMinutesWatched", 0)
-
-        self.precondition_drops = [d["id"] for d in (data.get("preconditionDrops") or [])]
+    def __repr__(self) -> str:
+        if self.is_claimed:
+            additional = ", claimed=True"
+        elif self.can_earn():
+            additional = ", can_earn=True"
+        else:
+            additional = ''
+        return f"Drop({self.rewards_text()}{additional})"
 
     @property
-    def progress(self) -> float:
-        """Progress as a fraction (0.0 to 1.0)."""
-        if self.required_minutes == 0:
-            return 1.0
-        return min(self.current_minutes / self.required_minutes, 1.0)
+    def preconditions_met(self) -> bool:
+        campaign = self.campaign
+        return all(campaign.timed_drops[pid].is_claimed for pid in self.precondition_drops)
+
+    def _on_state_changed(self) -> None:
+        raise NotImplementedError
+
+    def _base_earn_conditions(self) -> bool:
+        return (
+            self.preconditions_met
+            and not self.is_claimed
+            and (bool(self.benefits) or self.id in self.campaign.preconditions_chain())
+        )
+
+    def _base_can_earn(self) -> bool:
+        return (
+            self._base_earn_conditions()
+            and self.starts_at <= datetime.now(timezone.utc) < self.ends_at
+        )
+
+    def _can_earn_within(self, stamp: datetime) -> bool:
+        return (
+            self._base_earn_conditions()
+            and self.ends_at > datetime.now(timezone.utc)
+            and self.starts_at < stamp
+        )
+
+    def can_earn(
+        self, channel: Channel | None = None, ignore_channel_status: bool = False
+    ) -> bool:
+        return (
+            self._base_can_earn() and self.campaign._base_can_earn(channel, ignore_channel_status)
+        )
+
+    @property
+    def can_claim(self) -> bool:
+        return (
+            self.claim_id is not None
+            and not self.is_claimed
+            and datetime.now(timezone.utc) < self.campaign.ends_at + timedelta(hours=24)
+        )
+
+    def update_claim(self, claim_id: str) -> None:
+        self.claim_id = claim_id
+
+    async def generate_claim(self) -> None:
+        auth_state = await self.campaign._twitch.get_auth()
+        self.claim_id = f"{auth_state.user_id}#{self.campaign.id}#{self.id}"
+
+    def rewards_text(self, delim: str = ", ") -> str:
+        return delim.join(benefit.name for benefit in self.benefits)
+
+    async def claim(self) -> bool:
+        result = await self._claim()
+        if result:
+            self.is_claimed = result
+            claim_text = (
+                f"{self.campaign.game.name} | {self.campaign.name} "
+                f"({self.campaign.claimed_drops}/{self.campaign.total_drops}) | "
+                f"{self.rewards_text()}"
+            )
+            self._twitch.print(
+                _("status", "claimed_drop").format(drop=claim_text)
+            )
+            # Android-specific: pystray tray notify removed; use notifications backend
+            self._twitch.notifications.notify_drop(self)
+        else:
+            logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
+        return result
+
+    async def _claim(self) -> bool:
+        if self.is_claimed:
+            return True
+        if not self.can_claim:
+            return False
+        try:
+            response = await self._twitch.gql_request(
+                GQL_OPERATIONS["ClaimDrop"].with_variables(
+                    {"input": {"dropInstanceID": self.claim_id}}
+                )
+            )
+        except GQLException:
+            return False
+        data = response["data"]
+        if "errors" in data and data["errors"]:
+            return False
+        elif "claimDropRewards" in data:
+            if not data["claimDropRewards"]:
+                return False
+            elif (
+                data["claimDropRewards"]["status"]
+                in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED")
+            ):
+                return True
+        return False
+
+
+class TimedDrop(BaseDrop):
+    def __init__(
+        self, campaign: DropsCampaign, data: JsonType, claimed_benefits: dict[str, datetime]
+    ):
+        super().__init__(campaign, data, claimed_benefits)
+        self.real_current_minutes: int = (
+            "self" in data and data["self"]["currentMinutesWatched"] or 0
+        )
+        self.required_minutes: int = data["requiredMinutesWatched"]
+        self.extra_current_minutes: int = 0
+        if self.is_claimed:
+            self.real_current_minutes = self.required_minutes
+
+    def __repr__(self) -> str:
+        if self.is_claimed:
+            additional = ", claimed=True"
+        elif self.can_earn():
+            additional = ", can_earn=True"
+        else:
+            additional = ''
+        if 0 < self.current_minutes < self.required_minutes:
+            minutes = f", {self.current_minutes}/{self.required_minutes}"
+        else:
+            minutes = ''
+        return f"Drop({self.rewards_text()}{minutes}{additional})"
+
+    @property
+    def current_minutes(self) -> int:
+        return self.real_current_minutes + self.extra_current_minutes
 
     @property
     def remaining_minutes(self) -> int:
-        """Minutes remaining to complete."""
-        return max(0, self.required_minutes - self.current_minutes)
+        return self.required_minutes - self.current_minutes
+
+    @property
+    def total_required_minutes(self) -> int:
+        return self.required_minutes + max(
+            (
+                self.campaign.timed_drops[pid].total_required_minutes
+                for pid in self.precondition_drops
+            ),
+            default=0,
+        )
+
+    @property
+    def total_remaining_minutes(self) -> int:
+        return self.remaining_minutes + max(
+            (
+                self.campaign.timed_drops[pid].total_remaining_minutes
+                for pid in self.precondition_drops
+            ),
+            default=0,
+        )
+
+    @property
+    def progress(self) -> float:
+        if self.current_minutes <= 0 or self.required_minutes <= 0:
+            return 0.0
+        elif self.current_minutes >= self.required_minutes:
+            return 1.0
+        return self.current_minutes / self.required_minutes
+
+    @property
+    def availability(self) -> float:
+        now = datetime.now(timezone.utc)
+        if self.required_minutes > 0 and self.total_remaining_minutes > 0 and now < self.ends_at:
+            return ((self.ends_at - now).total_seconds() / 60) / self.total_remaining_minutes
+        return math.inf
 
     @property
     def is_complete(self) -> bool:
-        """Check if drop is complete."""
         return self.current_minutes >= self.required_minutes
 
     @property
     def active(self) -> bool:
-        """Check if drop is currently active."""
         now = datetime.now(timezone.utc)
         return self.starts_at <= now < self.ends_at
 
-    def can_earn(self) -> bool:
-        """Check if drop can be earned."""
+    def _base_earn_conditions(self) -> bool:
         return (
-            self.active
-            and not self.is_claimed
-            and not self.is_complete
+            super()._base_earn_conditions()
+            and self.required_minutes > 0
+            and self.extra_current_minutes < MAX_EXTRA_MINUTES
         )
 
-    def rewards_text(self) -> str:
-        """Get rewards as text."""
-        if not self.benefits:
-            return "No rewards"
-        return ", ".join(b.name for b in self.benefits)
+    def _on_state_changed(self) -> None:
+        # Android-specific: GUI callback replaced — implement in ui/
+        pass
 
-    def __str__(self):
+    def display(self, *, countdown: bool = True, subone: bool = False) -> None:
+        # Android-specific: GUI display replaced — implement in ui/
+        pass
+
+    def _update_real_minutes(self, delta: int) -> None:
+        if delta == 0 or self.real_current_minutes + delta < 0 or not self.can_earn():
+            return
+        if self.real_current_minutes + delta < self.required_minutes:
+            self.real_current_minutes += delta
+        else:
+            self.real_current_minutes = self.required_minutes
+        self.extra_current_minutes = 0
+        self._on_state_changed()
+
+    def _bump_minutes(self, channel: Channel | None) -> bool:
+        if self.can_earn(channel):
+            self.extra_current_minutes += 1
+            self._on_state_changed()
+            if self.extra_current_minutes >= MAX_EXTRA_MINUTES:
+                return True
+        return False
+
+    async def claim(self) -> bool:
+        result = await super().claim()
+        if result:
+            self.real_current_minutes = self.required_minutes
+            self.extra_current_minutes = 0
+        self._on_state_changed()
+        return result
+
+    def update_minutes(self, new_minutes: int) -> None:
+        delta: int = new_minutes - self.real_current_minutes
+        if delta == 0:
+            return
+        elif self.real_current_minutes + delta < 0:
+            delta = -self.real_current_minutes
+        elif self.real_current_minutes + delta > self.required_minutes:
+            delta = self.required_minutes - self.real_current_minutes
+        self.campaign._update_real_minutes(delta)
+
+    def __str__(self) -> str:
         return f"{self.name} ({self.current_minutes}/{self.required_minutes}min)"
-
-    def __repr__(self):
-        return f"TimedDrop({self.name}, {self.progress:.0%})"
 
 
 class DropsCampaign:
-    """Represents a drops campaign."""
+    def __init__(
+        self, twitch: TwitchClient, data: JsonType, claimed_benefits: dict[str, datetime]
+    ):
+        self._twitch: TwitchClient = twitch
+        self.id: str = data["id"]
+        self.name: str = data["name"]
+        self.game: Game = Game(data["game"])
+        self.linked: bool = data["self"]["isAccountConnected"]
+        self.unlinked: bool = data["self"]["isAccountConnected"] is False
+        self.link_url: str = data["accountLinkURL"]
+        self.image_url: URLType = remove_dimensions(data["game"]["boxArtURL"])
+        self.starts_at: datetime = timestamp(data["startAt"])
+        self.ends_at: datetime = timestamp(data["endAt"])
+        self._valid: bool = data["status"] != "EXPIRED"
+        allowed: JsonType = data["allow"]
+        self.allowed_channels: list[Channel] = (
+            [Channel.from_acl(twitch, channel_data) for channel_data in allowed["channels"]]
+            if allowed["channels"] and allowed.get("isEnabled", True) else []
+        )
+        self.timed_drops: dict[str, TimedDrop] = {
+            drop_data["id"]: TimedDrop(self, drop_data, claimed_benefits)
+            for drop_data in data["timeBasedDrops"]
+        }
 
-    def __init__(self, twitch: 'TwitchClient', data: dict):
-        self._twitch = twitch
+    def __repr__(self) -> str:
+        return f"Campaign({self.game!s}, {self.name}, {self.claimed_drops}/{self.total_drops})"
 
-        self.id = data["id"]
-        self.name = data["name"]
-        self.game = Game(data["game"])
+    def __str__(self) -> str:
+        return f"{self.name} ({self.game.name})"
 
-        self.starts_at = timestamp(data["startAt"])
-        self.ends_at = timestamp(data["endAt"])
+    @property
+    def drops(self) -> abc.Iterable[TimedDrop]:
+        return self.timed_drops.values()
 
-        self.image_url = data.get("imageURL", "")
-        self.description = data.get("description", "")
-
-        # Account linking
-        self.account_link_url = data.get("accountLinkURL")
-        self.eligible = True
-
-        # Check if account is linked
-        if "self" in data and data["self"]:
-            self.eligible = data["self"].get("isAccountConnected", False)
-
-        # Parse drops
-        self.drops: list[TimedDrop] = []
-        self.timed_drops: dict[str, TimedDrop] = {}
-
-        time_based_drops = data.get("timeBasedDrops") or []
-        for drop_data in time_based_drops:
-            drop = TimedDrop(self, drop_data)
-            self.drops.append(drop)
-            self.timed_drops[drop.id] = drop
-
-        # Allowed channels
-        self.allowed_channels: set = set()
-        allow_data = data.get("allow") or {}
-        if allow_data.get("isEnabled"):
-            channels_data = allow_data.get("channels") or []
-            for ch_data in channels_data:
-                # Store channel IDs
-                self.allowed_channels.add(int(ch_data["id"]))
+    @property
+    def time_triggers(self) -> set[datetime]:
+        return set(
+            chain(
+                (self.starts_at, self.ends_at),
+                *((d.starts_at, d.ends_at) for d in self.timed_drops.values()),
+            )
+        )
 
     @property
     def active(self) -> bool:
-        """Check if campaign is currently active."""
-        now = datetime.now(timezone.utc)
-        return self.starts_at <= now < self.ends_at
+        return self._valid and self.starts_at <= datetime.now(timezone.utc) < self.ends_at
+
+    @property
+    def upcoming(self) -> bool:
+        return self._valid and datetime.now(timezone.utc) < self.starts_at
+
+    @property
+    def expired(self) -> bool:
+        return not self._valid or self.ends_at <= datetime.now(timezone.utc)
 
     @property
     def total_drops(self) -> int:
-        """Total number of drops."""
-        return len(self.drops)
+        return len(self.timed_drops)
+
+    @property
+    def eligible(self) -> bool:
+        settings = self._twitch.settings
+        if self.has_badge_or_emote:
+            return settings.enable_badges_emotes
+        return self.linked or (self.unlinked and settings.unlinked_campaigns)
+
+    @cached_property
+    def has_badge_or_emote(self) -> bool:
+        return any(
+            benefit.type.is_badge_or_emote() for drop in self.drops for benefit in drop.benefits
+        )
+
+    @property
+    def finished(self) -> bool:
+        return all(d.is_claimed or d.required_minutes <= 0 for d in self.drops)
 
     @property
     def claimed_drops(self) -> int:
-        """Number of claimed drops."""
-        return sum(1 for d in self.drops if d.is_claimed)
+        return sum(d.is_claimed for d in self.drops)
 
     @property
     def remaining_drops(self) -> int:
-        """Number of remaining drops."""
-        return sum(1 for d in self.drops if not d.is_claimed)
+        return sum(not d.is_claimed for d in self.drops)
 
     @property
-    def progress(self) -> float:
-        """Overall campaign progress."""
-        if not self.drops:
-            return 0.0
-        return sum(d.progress for d in self.drops) / len(self.drops)
+    def required_minutes(self) -> int:
+        return max(d.total_required_minutes for d in self.drops)
 
     @property
     def remaining_minutes(self) -> int:
-        """Total remaining minutes."""
-        return sum(d.remaining_minutes for d in self.drops if not d.is_claimed)
+        return max(d.total_remaining_minutes for d in self.drops)
+
+    @property
+    def progress(self) -> float:
+        return sum(d.progress for d in self.drops) / self.total_drops
 
     @property
     def availability(self) -> float:
-        """Campaign availability (time until end)."""
-        now = datetime.now(timezone.utc)
-        total = (self.ends_at - self.starts_at).total_seconds()
-        remaining = (self.ends_at - now).total_seconds()
-        return max(0.0, remaining / total) if total > 0 else 0.0
+        return min(d.availability for d in self.drops)
 
     @property
-    def first_drop(self) -> Optional[TimedDrop]:
-        """Get first earnable drop."""
-        earnable = [d for d in self.drops if d.can_earn()]
-        if not earnable:
-            return None
-        earnable.sort(key=lambda d: d.remaining_minutes)
-        return earnable[0]
+    def first_drop(self) -> TimedDrop | None:
+        drops: list[TimedDrop] = sorted(
+            (drop for drop in self.drops if drop.can_earn()),
+            key=lambda d: d.remaining_minutes,
+        )
+        return drops[0] if drops else None
 
-    def get_drop(self, drop_id: str) -> Optional[TimedDrop]:
-        """Get drop by ID."""
+    def get_drop(self, drop_id: str) -> TimedDrop | None:
         return self.timed_drops.get(drop_id)
 
-    def can_earn(self, channel: Optional['Channel'] = None) -> bool:
-        """Check if campaign can be earned."""
-        if not self.eligible or not self.active:
-            return False
+    def preconditions_chain(self) -> set[str]:
+        return set(
+            chain.from_iterable(
+                drop.precondition_drops for drop in self.drops if not drop.is_claimed
+            )
+        )
 
-        if channel is None:
-            return any(d.can_earn() for d in self.drops)
+    def _update_real_minutes(self, delta: int) -> None:
+        for drop in self.drops:
+            drop._update_real_minutes(delta)
+        if (first_drop := self.first_drop) is not None:
+            first_drop.display()
 
-        # Check channel restrictions
-        if self.allowed_channels and channel.id not in self.allowed_channels:
-            return False
+    def _base_can_earn(
+        self, channel: Channel | None = None, ignore_channel_status: bool = False
+    ) -> bool:
+        return (
+            self.eligible
+            and self.active
+            and (
+                channel is None or (
+                    (not self.allowed_channels or channel in self.allowed_channels)
+                    and (
+                        ignore_channel_status
+                        or channel.game is not None and channel.game == self.game
+                        or self.game.is_special_events()
+                    )
+                )
+            )
+        )
 
-        # Check if channel is playing the right game
-        if channel.game and channel.game != self.game:
-            return False
+    def can_earn(
+        self, channel: Channel | None = None, ignore_channel_status: bool = False
+    ) -> bool:
+        return (
+            self._base_can_earn(channel, ignore_channel_status)
+            and any(drop._base_can_earn() for drop in self.drops)
+        )
 
-        return any(d.can_earn() for d in self.drops)
+    def can_earn_within(self, stamp: datetime) -> bool:
+        return (
+            self.eligible
+            and self._valid
+            and self.ends_at > datetime.now(timezone.utc)
+            and self.starts_at < stamp
+            and any(drop._can_earn_within(stamp) for drop in self.drops)
+        )
 
-    def __str__(self):
-        return f"{self.name} ({self.game.name})"
-
-    def __repr__(self):
-        return f"DropsCampaign({self.name}, {self.claimed_drops}/{self.total_drops})"
+    def bump_minutes(self, channel: Channel) -> None:
+        if any([drop._bump_minutes(channel) for drop in self.drops]):
+            logger.warning(
+                f"At least one of the drops in campaign \"{self.name}({self.game.name})\" "
+                "has reached the maximum extra minutes limit!"
+            )
+            self._twitch.change_state(State.CHANNEL_SWITCH)
+        if (first_drop := self.first_drop) is not None:
+            first_drop.display()
