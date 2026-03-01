@@ -1,3 +1,4 @@
+# Android-specific: ImageCache is not yet wired into TwitchClient; reserved for future drop image display.
 """Image cache for TwitchDropsMiner Android.
 
 Desktop counterpart (TwitchDropsMiner/cache.py) stores PIL images in
