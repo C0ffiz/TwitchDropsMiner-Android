@@ -1,4 +1,5 @@
 """UI Screens for TwitchDropsMiner Android - KivyMD 2.0"""
+from kivy.clock import Clock
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
@@ -108,7 +109,11 @@ class HomeScreen(BaseScreen):
     def update_drop(self, drop):
         if drop:
             self.drop_text = str(drop)
-            self.progress_value = 0
+            # Android-specific: compute progress from TimedDrop minutes; guard against zero
+            if drop.required_minutes > 0:
+                self.progress_value = (drop.current_minutes / drop.required_minutes) * 100
+            else:
+                self.progress_value = 0
         else:
             self.drop_text = "No active drop"
             self.progress_value = 0
@@ -179,9 +184,25 @@ class ChannelsScreen(BaseScreen):
         self.list_view = MDList()
         scroll.add_widget(self.list_view)
         self.layout.add_widget(scroll)
-        item = MDListItem()
-        item.add_widget(MDListItemHeadlineText(text="No channels loaded"))
-        self.list_view.add_widget(item)
+
+    def on_enter(self, *args):
+        # Android-specific: rebuild live channel list every time the screen is entered
+        self.list_view.clear_widgets()
+        channels = (
+            list(self.app.twitch_client.channels.values())
+            if self.app.twitch_client else []
+        )
+        if not channels:
+            item = MDListItem()
+            item.add_widget(MDListItemHeadlineText(text="No channels loaded"))
+            self.list_view.add_widget(item)
+            return
+        for channel in channels:
+            item = MDListItem()
+            item.add_widget(MDListItemHeadlineText(text=channel.name))
+            viewers = channel._stream.viewers if channel._stream else 0
+            item.add_widget(MDListItemSupportingText(text=f"Viewers: {viewers}"))
+            self.list_view.add_widget(item)
 
 
 class SettingsScreen(BaseScreen):
@@ -194,18 +215,18 @@ class SettingsScreen(BaseScreen):
 
         auto_claim_box = BoxLayout(size_hint_y=None, height=dp(50))
         auto_claim_box.add_widget(MDLabel(text="Auto Claim Drops"))
-        auto_claim_switch = MDSwitch()
-        auto_claim_switch.active = self.app.settings.auto_claim
-        auto_claim_switch.bind(active=self.on_auto_claim_change)
-        auto_claim_box.add_widget(auto_claim_switch)
+        self.auto_claim_switch = MDSwitch()
+        # Android-specific: active state set in on_enter(); App.get_running_app() may be None here
+        self.auto_claim_switch.bind(active=self.on_auto_claim_change)
+        auto_claim_box.add_widget(self.auto_claim_switch)
         content.add_widget(auto_claim_box)
 
         notif_box = BoxLayout(size_hint_y=None, height=dp(50))
         notif_box.add_widget(MDLabel(text="Notifications"))
-        notif_switch = MDSwitch()
-        notif_switch.active = self.app.settings.notifications_enabled
-        notif_switch.bind(active=self.on_notifications_change)
-        notif_box.add_widget(notif_switch)
+        self.notif_switch = MDSwitch()
+        # Android-specific: active state set in on_enter(); App.get_running_app() may be None here
+        self.notif_switch.bind(active=self.on_notifications_change)
+        notif_box.add_widget(self.notif_switch)
         content.add_widget(notif_box)
 
         logout_btn = MDButton(size_hint_y=None, height=dp(50), on_release=lambda x: self.app.logout())
@@ -214,6 +235,12 @@ class SettingsScreen(BaseScreen):
 
         scroll.add_widget(content)
         self.layout.add_widget(scroll)
+
+    def on_enter(self, *args):
+        # Android-specific: read settings here, not in __init__, to avoid None app during construction
+        settings = self.app.settings
+        self.auto_claim_switch.active = settings.auto_claim
+        self.notif_switch.active = settings.notifications_enabled
 
     def on_auto_claim_change(self, instance, value):
         self.app.settings.auto_claim = value
@@ -241,14 +268,30 @@ class LogsScreen(BaseScreen):
         toolbar.add_widget(trailing)
         self.layout.add_widget(toolbar)
         scroll = ScrollView()
+        self.scroll_view = scroll  # Android-specific: stored for auto-scroll in add_log/on_enter
         self.list_view = MDList()
         scroll.add_widget(self.list_view)
         self.layout.add_widget(scroll)
+
+    def on_enter(self, *args):
+        # Android-specific: pre-populate from buffered logs if screen is opened for the first time
+        if not self.list_view.children:
+            for msg in self.app.logs:
+                item = MDListItem()
+                item.add_widget(MDListItemHeadlineText(text=msg))
+                self.list_view.add_widget(item)
+            if self.list_view.children:
+                # children[0] is the last-added widget in Kivy — scroll to newest entry
+                Clock.schedule_once(
+                    lambda dt: self.scroll_view.scroll_to(self.list_view.children[0])
+                )
 
     def add_log(self, message):
         item = MDListItem()
         item.add_widget(MDListItemHeadlineText(text=message))
         self.list_view.add_widget(item)
+        # Android-specific: scroll to newest entry after layout pass
+        Clock.schedule_once(lambda dt, i=item: self.scroll_view.scroll_to(i))
 
     def clear_logs(self, *args):
         self.list_view.clear_widgets()
