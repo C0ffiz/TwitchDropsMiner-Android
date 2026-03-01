@@ -7,7 +7,7 @@ from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
 from kivymd.app import MDApp
-from kivymd.uix.snackbar import MDSnackbar
+from kivymd.uix.snackbar import MDSnackbar, MDSnackbarText  # Android-specific: KivyMD 2.x API
 from core.settings import Settings
 from core.twitch_client import TwitchClient
 from ui.screens import HomeScreen, LoginScreen, InventoryScreen, SettingsScreen, ChannelsScreen, LogsScreen
@@ -76,10 +76,8 @@ class TwitchDropsMinerApp(MDApp):
         self.logs.append(message)
         if len(self.logs) > 500:
             self.logs.pop(0)
-        def update_logs_ui(msg):
-            if self.screen_manager.current == 'logs':
-                self.screen_manager.get_screen('logs').add_log(msg)
-        self._update_ui(update_logs_ui, message)
+        # Android-specific: always buffer — LogsScreen shows all messages whenever entered
+        self._update_ui(self.screen_manager.get_screen('logs').add_log, message)
 
     def on_status(self, status):
         self._update_ui(self.screen_manager.get_screen('home').update_status, status)
@@ -97,7 +95,13 @@ class TwitchDropsMinerApp(MDApp):
         self._update_ui(self.screen_manager.get_screen('inventory').update_inventory, inventory)
 
     def on_notify(self, title, message):
-        self._update_ui(lambda t: MDSnackbar(text=t).open(), f"{title}: {message}")
+        # Android-specific: KivyMD 2.x requires MDSnackbarText child widget
+        def _show_snackbar(dt, t=f"{title}: {message}"):
+            try:
+                MDSnackbar(MDSnackbarText(text=t)).open()
+            except Exception:
+                MDSnackbar(text=t).open()  # fallback for KivyMD 1.x
+        Clock.schedule_once(_show_snackbar)
 
     def start_mining(self):
         if self.twitch_client and not self.twitch_client._running:
@@ -123,7 +127,13 @@ class TwitchDropsMinerApp(MDApp):
                     self.screen_manager.get_screen('login').show_error(msg)
                 Clock.schedule_once(_show_error)
 
-        future = asyncio.run_coroutine_threadsafe(self.twitch_client.login(), self.loop)
+        # Android-specific: close the existing session first so get_session()
+        # rebuilds it with the new Authorization header from the saved token
+        async def _close_and_login():
+            await self.twitch_client.close_session()
+            return await self.twitch_client.login()
+
+        future = asyncio.run_coroutine_threadsafe(_close_and_login(), self.loop)
         future.add_done_callback(_on_login_done)
 
     def logout(self):
@@ -133,8 +143,17 @@ class TwitchDropsMinerApp(MDApp):
         self.screen_manager.current = 'login'
 
     def on_stop(self):
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.settings.save()
+        # Android-specific: schedule a clean shutdown coroutine on the event loop.
+        # stop() cancels tasks and closes the session before we halt the loop.
+        # settings.save() is called only after stop() completes, not before.
+        async def _stop_then_halt():
+            if self.twitch_client:
+                await self.twitch_client.stop()
+            self.settings.save()
+            self.loop.stop()
+
+        asyncio.run_coroutine_threadsafe(_stop_then_halt(), self.loop)
+        self.async_thread.join(timeout=5)  # Android-specific: wait for clean shutdown
 
 
 def main():
