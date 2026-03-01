@@ -4,6 +4,11 @@ from __future__ import annotations
 import random
 import logging
 from copy import deepcopy
+
+# Logging special level (mirrors upstream)
+CALL: int = logging.INFO - 1
+logging.addLevelName(CALL, "CALL")
+
 from enum import Enum, auto
 from datetime import timedelta
 from pathlib import Path
