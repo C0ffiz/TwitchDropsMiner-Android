@@ -286,8 +286,8 @@ class TimedDrop(BaseDrop):
         pass
 
     def display(self, *, countdown: bool = True, subone: bool = False) -> None:
-        # Android-specific: GUI display replaced — implement in ui/
-        pass
+        # Android-specific: countdown/subone are desktop GUI hints; ignored on Android — calls update_drop() directly
+        self._twitch.update_drop(self)
 
     def _update_real_minutes(self, delta: int) -> None:
         if delta == 0 or self.real_current_minutes + delta < 0 or not self.can_earn():
