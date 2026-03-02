@@ -75,7 +75,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install --upgrade pip
-          pip install buildozer cython
+          pip install buildozer "cython==0.29.37"
           pip install --upgrade python-for-android
         shell: bash
 
