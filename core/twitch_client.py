@@ -1048,6 +1048,7 @@ class TwitchClient:
         self.print("Starting TwitchDropsMiner...")
         self.update_status("Starting...")
         try:
+            await self.close_session()  # Android-specific: force session rebuild with confirmed token before mining
             await self._run()
         except Exception as e:
             self.print(f"Fatal error: {e}")
