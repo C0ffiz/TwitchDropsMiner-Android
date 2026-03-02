@@ -3,7 +3,6 @@ import asyncio
 import logging
 import json
 from time import time
-from copy import deepcopy
 from collections import deque, OrderedDict
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
@@ -17,10 +16,9 @@ from core.constants import (
 )
 from core.exceptions import (
     MinerException, LoginException, GQLException,
-    CaptchaRequired, ExitRequest
 )
 from core.utils import (
-    create_nonce, timestamp, Game, AwaitableValue,
+    timestamp, Game, AwaitableValue,
     ExponentialBackoff, RateLimiter, chunk, task_wrapper,
 )
 from core.settings import Settings
@@ -69,7 +67,6 @@ class TwitchClient:
 
         # Data
         self.inventory: list[DropsCampaign] = []
-        self.channels: dict[int, Channel] = {}  # keyed by channel id
         self.watching_channel: AwaitableValue = AwaitableValue()  # Android-specific: was Optional[Channel]
         self.current_drop: Optional[TimedDrop] = None
         self.games: set[Game] = set()
@@ -81,6 +78,9 @@ class TwitchClient:
 
         # Game priority list
         self.wanted_games: list[Game] = []
+
+        # Channels (OrderedDict preserves insertion order; iteration order matters for priority)
+        self.channels: OrderedDict[int, Channel] = OrderedDict()
 
         # Android-specific: renamed from websocket_pool to websocket
         self.websocket: Optional[WebsocketPool] = None
@@ -299,6 +299,113 @@ class TwitchClient:
     async def wait_until_login(self):
         """Wait until logged in."""
         await self._logged_in.wait()
+
+    async def start_device_login(self) -> None:
+        """
+        OAuth device code flow (Phase 7).
+
+        Fires on_login_code(user_code, verification_uri) when a code is obtained,
+        then polls id.twitch.tv/oauth2/token every `interval` seconds until the
+        user activates the device or the code expires.
+
+        On success: saves oauth_token to settings, validates via login() to fetch
+        user_id/username, then fires on_login_success().
+
+        On code expiry: requests a new device code and fires on_login_code again.
+        Mirrors upstream _AuthState._oauth_login() without tkinter / gui calls.
+        """
+        req_headers = {
+            "Accept": "application/json",
+            "Client-Id": CLIENT_ID,
+        }
+        device_payload = {
+            "client_id": CLIENT_ID,
+            "scopes": "",  # no scopes needed
+        }
+
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+
+                # ---- Step 1: request device code ----
+                async with aiohttp.ClientSession() as auth_session:
+                    async with auth_session.post(
+                        "https://id.twitch.tv/oauth2/device",
+                        headers=req_headers,
+                        data=device_payload,
+                    ) as response:
+                        if response.status != 200:
+                            raise LoginException(
+                                f"Device code request failed (HTTP {response.status})"
+                            )
+                        data: dict = await response.json()
+
+                device_code: str = data["device_code"]
+                user_code: str = data["user_code"]
+                interval: int = data["interval"]
+                verification_uri: str = data["verification_uri"]
+                expires_at = now + timedelta(seconds=data["expires_in"])
+
+                logger.info(
+                    f"Device login: user_code={user_code}, "
+                    f"expires_in={data['expires_in']}s, interval={interval}s"
+                )
+
+                # ---- Step 2: show code in UI ----
+                self._callback("on_login_code", user_code, verification_uri)
+
+                token_payload = {
+                    "client_id": CLIENT_ID,
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                }
+
+                # ---- Step 3: polling loop ----
+                # Use a single session for the entire polling sequence.
+                async with aiohttp.ClientSession() as auth_session:
+                    code_expired = False
+                    while not code_expired:
+                        # Sleep first — user won't activate that fast.
+                        await asyncio.sleep(interval)
+
+                        if datetime.now(timezone.utc) >= expires_at:
+                            code_expired = True
+                            break
+
+                        async with auth_session.post(
+                            "https://id.twitch.tv/oauth2/token",
+                            headers=req_headers,
+                            data=token_payload,
+                        ) as response:
+                            if response.status == 400:
+                                # authorization_pending — user hasn't entered code yet
+                                continue
+                            if response.status != 200:
+                                logger.warning(
+                                    f"Token poll unexpected HTTP {response.status}"
+                                )
+                                continue
+                            token_data: dict = await response.json()
+
+                        # ---- Step 4: success — save token and validate ----
+                        self.settings.oauth_token = token_data["access_token"]
+                        # Force rebuild of the main session with the new Authorization header.
+                        await self.close_session()
+                        # Validate token; sets settings.user_id, settings.username, _logged_in.
+                        await self.login()
+                        self._callback("on_login_success")
+                        return
+
+                # Code expired — loop back to request a new one.
+                logger.info("Device activation code expired, requesting a new one")
+                self.print("Activation code expired. Requesting a new code...")
+
+            except (LoginException, asyncio.CancelledError):
+                raise
+            except Exception as e:
+                logger.error(f"Device login error: {e}")
+                self.print(f"Device login error: {e}")
+                await asyncio.sleep(5)
 
     # ========================================================================
     # INVENTORY & CAMPAIGNS
@@ -832,6 +939,8 @@ class TwitchClient:
                         active_drop.display()
                         self.update_drop(active_drop)
                     logger.log(CALL, f"Drop progress from active search: {active_campaign.game}")
+                else:
+                    logger.log(CALL, "No active drop could be determined")
             await self._watch_sleep(interval - min(time() - last_sent, interval))
 
     # ========================================================================
@@ -863,7 +972,7 @@ class TwitchClient:
             ])
 
         full_cleanup: bool = False
-        channels: OrderedDict = self.channels  # type: ignore[assignment]
+        channels: OrderedDict[int, Channel] = self.channels
         self.change_state(State.INVENTORY_FETCH)
 
         while True:

@@ -19,8 +19,6 @@ from core.constants import CALL, GQL_OPERATIONS, ONLINE_DELAY, URLType
 if TYPE_CHECKING:
     from core.twitch_client import TwitchClient
     from core.constants import JsonType, GQLOperation
-    # Android-specific: ChannelList is a Kivy widget defined in ui/
-    ChannelList = Any
 
 
 logger = logging.getLogger("TwitchDrops")
@@ -137,7 +135,7 @@ class Stream:
 
 class Channel:
     __slots__ = (
-        "_twitch", "_gui_channels", "id", "_login", "_display_name", "_spade_url",
+        "_twitch", "id", "_login", "_display_name", "_spade_url",
         "_stream", "_pending_stream_up", "acl_based"
     )
 
@@ -151,7 +149,6 @@ class Channel:
         acl_based: bool = False,
     ):
         self._twitch: TwitchClient = twitch
-        self._gui_channels: Any = None  # Android-specific: set by UI layer when ready
         self.id: int = int(id)
         self._login: str = login
         self._display_name: str | None = display_name
@@ -187,6 +184,9 @@ class Channel:
         else:
             name = self._login
         return f"Channel({name}, {self.id})"
+
+    def __str__(self) -> str:
+        return self.name
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, self.__class__):
@@ -262,15 +262,32 @@ class Channel:
             return self._stream.drops_enabled
         return False
 
+    @property
+    def status_text(self) -> str:
+        """Human-readable channel status for the ChannelsScreen."""
+        if self.online:
+            game = self.game
+            viewers = self.viewers
+            parts = ["Online"]
+            if game is not None:
+                parts.append(str(game))
+            if viewers is not None:
+                parts.append(f"{viewers:,} viewers")
+            return " — ".join(parts)
+        if self.pending_online:
+            return "Pending"
+        return "Offline"
+
     def display(self, *, add: bool = False) -> None:
-        # Android-specific: GUI display replaced — implement in ui/
-        pass
+        # Android-specific: fires on_channels callback so ChannelsScreen stays in sync
+        self._twitch.update_channels()
 
     def remove(self) -> None:
-        # Android-specific: GUI removal replaced — implement in ui/
         if self._pending_stream_up is not None:
             self._pending_stream_up.cancel()
             self._pending_stream_up = None
+        # Android-specific: fire on_channels so ChannelsScreen reflects the removal
+        self._twitch.update_channels()
 
     async def get_spade_url(self) -> URLType:
         SETTINGS_PATTERN: str = (
@@ -295,11 +312,9 @@ class Channel:
         return URLType(match.group(1))
 
     def _check_drops_enabled(self, available_drops: list[JsonType]) -> bool:
-        # Android-specific: inventory is a list, not a dict — use linear search
-        campaigns_by_id = {c.id: c for c in self._twitch.inventory}
         return any(
             (
-                (campaign := campaigns_by_id.get(campaign_data["id"])) is not None
+                (campaign := self._twitch._campaigns.get(campaign_data["id"])) is not None
                 and campaign.can_earn(self, ignore_channel_status=True)
             )
             for campaign_data in available_drops

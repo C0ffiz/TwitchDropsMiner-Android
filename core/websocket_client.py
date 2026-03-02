@@ -57,6 +57,8 @@ class Websocket:
         # Android-specific: no GUI websocket widget — log only
         if status:
             ws_logger.debug(f"Websocket[{self._idx}] status: {status}")
+        if refresh_topics:
+            ws_logger.debug(f"Websocket[{self._idx}] topics: {len(self.topics)}")
 
     def request_reconnect(self) -> None:
         self._next_ping = time()
@@ -91,7 +93,9 @@ class Websocket:
     def stop_nowait(self, *, remove: bool = False):
         asyncio.create_task(task_wrapper(self.stop)(remove=remove))
 
-    async def _backoff_connect(self, ws_url: str, **kwargs):
+    async def _backoff_connect(
+        self, ws_url: str, **kwargs
+    ) -> abc.AsyncGenerator[aiohttp.ClientWebSocketResponse, None]:
         # Android-specific: proxy from settings; exponential backoff on failure
         session = await self._twitch.get_session()
         backoff = ExponentialBackoff(**kwargs)
@@ -134,7 +138,7 @@ class Websocket:
             except WebsocketClosed as exc:
                 if exc.received:
                     ws_logger.warning(
-                        f"Websocket[{self._idx}] closed by server: {websocket.close_code}"
+                        f"Websocket[{self._idx}] closed unexpectedly: {websocket.close_code}"
                     )
                 elif self._closed.is_set():
                     ws_logger.info(f"Websocket[{self._idx}] stopped.")
@@ -160,19 +164,32 @@ class Websocket:
             return
         self._topics_changed.clear()
         self.set_status(refresh_topics=True)
-        # Android-specific: no get_auth() — oauth_token from settings directly
-        auth_token = self._twitch.settings.oauth_token
+        # Android-specific: no get_auth() — oauth_token from settings directly.
+        # Strip "oauth:" prefix that might be present from manually-entered tokens;
+        # PubSub auth_token must be a bare access token.
+        auth_token: str = self._twitch.settings.oauth_token or ""
+        if auth_token.startswith("oauth:"):
+            auth_token = auth_token[len("oauth:"):]
+        if not auth_token:
+            ws_logger.warning(
+                f"Websocket[{self._idx}] no auth token available, skipping topic update"
+            )
+            return
         current: set[WebsocketTopic] = set(self.topics.values())
         removed = self._submitted.difference(current)
         if removed:
-            for topics in chunk(list(map(str, removed)), 20):
+            topics_list = list(map(str, removed))
+            ws_logger.debug(f"Websocket[{self._idx}]: Removing topics: {', '.join(topics_list)}")
+            for topics in chunk(topics_list, 20):
                 await self.send(
                     {"type": "UNLISTEN", "data": {"topics": topics, "auth_token": auth_token}}
                 )
             self._submitted.difference_update(removed)
         added = current.difference(self._submitted)
         if added:
-            for topics in chunk(list(map(str, added)), 20):
+            topics_list = list(map(str, added))
+            ws_logger.debug(f"Websocket[{self._idx}]: Adding topics: {', '.join(topics_list)}")
+            for topics in chunk(topics_list, 20):
                 await self.send(
                     {"type": "LISTEN", "data": {"topics": topics, "auth_token": auth_token}}
                 )
@@ -198,7 +215,7 @@ class Websocket:
                 )
                 raise WebsocketClosed()
             else:
-                ws_logger.error(f"Websocket[{self._idx}] unknown message: {raw_message}")
+                ws_logger.error(f"Websocket[{self._idx}] error: Unknown message: {raw_message}")
 
     async def _handle_recv(self):
         messages: list[JsonType] = []
@@ -213,7 +230,7 @@ class Websocket:
             elif msg_type == "RESPONSE":
                 pass
             elif msg_type == "RECONNECT":
-                ws_logger.warning(f"Websocket[{self._idx}] reconnect requested.")
+                ws_logger.warning(f"Websocket[{self._idx}] requested reconnect.")
                 self.request_reconnect()
             else:
                 ws_logger.warning(f"Websocket[{self._idx}] unknown payload: {message}")
@@ -300,6 +317,16 @@ class WebsocketPool:
             return
         for ws in self.websockets:
             ws.remove_topics(topics_set)
-        while len(self.websockets) > 1 and not self.websockets[-1].topics:
-            last_ws = self.websockets.pop()
-            last_ws.stop_nowait(remove=True)
+        # If topics were removed and a websocket is now underfull, consolidate:
+        # pop the last websocket, recycle its topics into the remaining ones.
+        recycled_topics: list[WebsocketTopic] = []
+        while True:
+            count = sum(len(ws.topics) for ws in self.websockets)
+            if count <= (len(self.websockets) - 1) * WS_TOPICS_LIMIT:
+                ws = self.websockets.pop()
+                recycled_topics.extend(ws.topics.values())
+                ws.stop_nowait(remove=True)
+            else:
+                break
+        if recycled_topics:
+            self.add_topics(recycled_topics)

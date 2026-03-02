@@ -73,8 +73,6 @@ PING_INTERVAL = timedelta(minutes=3)    # upstream value (was 4 min — correcte
 PING_TIMEOUT = timedelta(seconds=10)
 ONLINE_DELAY = timedelta(seconds=120)
 WATCH_INTERVAL = timedelta(seconds=59)  # upstream value: matches Twitch's 1-min drop window (was 20s)
-# Android-specific: slower polling when the app is backgrounded
-BACKGROUND_WATCH_INTERVAL = timedelta(seconds=120)  # Android-specific
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -462,11 +460,6 @@ GQL_OPERATIONS: dict[str, GQLOperation] = {
         },
     ),
 }
-
-# Android-specific: legacy aliases used by twitch_client.py before names were aligned
-GQL_OPERATIONS["GetDropCampaigns"] = GQL_OPERATIONS["Campaigns"]   # Android-specific: alias
-GQL_OPERATIONS["GetInventory"] = GQL_OPERATIONS["Inventory"]        # Android-specific: alias
-GQL_OPERATIONS["GetDirectory"] = GQL_OPERATIONS["GameDirectory"]    # Android-specific: alias
 
 # ---------------------------------------------------------------------------
 # WebsocketTopic

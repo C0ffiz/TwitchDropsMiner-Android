@@ -145,8 +145,8 @@ class BaseDrop:
         self.claim_id = claim_id
 
     async def generate_claim(self) -> None:
-        auth_state = await self.campaign._twitch.get_auth()
-        self.claim_id = f"{auth_state.user_id}#{self.campaign.id}#{self.id}"
+        user_id = self.campaign._twitch.settings.user_id
+        self.claim_id = f"{user_id}#{self.campaign.id}#{self.id}"
 
     def rewards_text(self, delim: str = ", ") -> str:
         return delim.join(benefit.name for benefit in self.benefits)
@@ -165,6 +165,8 @@ class BaseDrop:
             )
             # Android-specific: desktop tray notify removed; use notifications backend
             self._twitch.notifications.notify_drop(self)
+            # Android-specific: refresh InventoryTab so claimed status updates immediately
+            self._twitch.update_inventory()
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result
@@ -282,8 +284,8 @@ class TimedDrop(BaseDrop):
         )
 
     def _on_state_changed(self) -> None:
-        # Android-specific: GUI callback replaced — implement in ui/
-        pass
+        # Android-specific: fires on_drop callback so the Main tab progress bar stays current
+        self._twitch.update_drop(self)
 
     def display(self, *, countdown: bool = True, subone: bool = False) -> None:
         # Android-specific: countdown/subone are desktop GUI hints; ignored on Android — calls update_drop() directly
@@ -325,6 +327,18 @@ class TimedDrop(BaseDrop):
             delta = self.required_minutes - self.real_current_minutes
         self.campaign._update_real_minutes(delta)
 
+    @property
+    def status_text(self) -> str:
+        """Human-readable drop status for the InventoryTab."""
+        if self.is_claimed:
+            return "Claimed"
+        if self.can_claim:
+            return "Ready to Claim"
+        if self.current_minutes > 0:
+            pct = self.progress
+            return f"{pct:.0%} ({self.current_minutes}/{self.required_minutes} min)"
+        return "Not Started"
+
     def __str__(self) -> str:
         return f"{self.name} ({self.current_minutes}/{self.required_minutes}min)"
 
@@ -359,6 +373,19 @@ class DropsCampaign:
 
     def __str__(self) -> str:
         return f"{self.name} ({self.game.name})"
+
+    @property
+    def status_text(self) -> str:
+        """Human-readable campaign status for the InventoryTab."""
+        if self.finished:
+            return "Completed"
+        if self.active:
+            if any(d.current_minutes > 0 for d in self.drops):
+                return "In Progress"
+            return "Active"
+        if self.upcoming:
+            return "Upcoming"
+        return "Expired"
 
     @property
     def drops(self) -> abc.Iterable[TimedDrop]:

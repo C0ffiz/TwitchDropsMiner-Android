@@ -29,7 +29,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, NewType, Optional, TypedDict, TYPE_CHECKING
 
-from PIL import Image as Image_module
+try:
+    from PIL import Image as Image_module  # optional; provided by Buildozer on Android
+    _HAS_PIL = True
+except ImportError:  # dev machine without Pillow installed
+    Image_module = None  # type: ignore[assignment]
+    _HAS_PIL = False
 
 from core.constants import URLType, get_app_paths
 from core.utils import json_load, json_save
@@ -182,6 +187,8 @@ class ImageCache:
         Returns a hex string with a '.png' suffix so it can be used directly
         as a filename.
         """
+        if not _HAS_PIL:
+            raise RuntimeError("Pillow is required for ImageCache — install it via 'pip install pillow'")
         pixel_data = list(
             image.resize((10, 10), Image_module.Resampling.LANCZOS).convert("L").getdata()
         )
@@ -204,6 +211,8 @@ class ImageCache:
         level.  Pass it if future code needs to pre-scale, but ignore it for
         now.
         """  # Android-specific: returns str path, not tkinter PhotoImage
+        if not _HAS_PIL:
+            raise RuntimeError("Pillow is required for ImageCache — install it via 'pip install pillow'")
         async with self._lock:
             if not self._initialized:
                 self._initialize()

@@ -9,7 +9,7 @@ from kivymd.app import MDApp
 from kivymd.uix.snackbar import MDSnackbar, MDSnackbarText  # Android-specific: KivyMD 2.x API
 from core.settings import Settings
 from core.twitch_client import TwitchClient
-from ui.screens import HomeScreen, LoginScreen, InventoryScreen, SettingsScreen, ChannelsScreen, LogsScreen
+from ui.screens import LoginScreen, AppScreen, ChannelsScreen, LogsScreen
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("TwitchDrops")
@@ -36,41 +36,81 @@ class TwitchDropsMinerApp(MDApp):
     def build(self):
         self.settings = Settings()  # Android-specific: deferred — App must be running for get_app_paths()
         self.screen_manager = ScreenManager()
-        self.screen_manager.add_widget(HomeScreen(name='home'))
+        # Phase 1 navigation architecture: LoginScreen + AppScreen (bottom nav shell) + secondary screens
         self.screen_manager.add_widget(LoginScreen(name='login'))
-        self.screen_manager.add_widget(InventoryScreen(name='inventory'))
-        self.screen_manager.add_widget(SettingsScreen(name='settings'))
+        self.screen_manager.add_widget(AppScreen(name='app'))
         self.screen_manager.add_widget(ChannelsScreen(name='channels'))
         self.screen_manager.add_widget(LogsScreen(name='logs'))
         callbacks = {
+            'on_login_code': self.on_login_code,    # device code flow: show code on LoginScreen
+            'on_login_success': self.on_login_success,  # device code flow: navigate to AppScreen
             'on_print': self.on_print,
             'on_status': self.on_status,
             'on_progress': self.on_progress,
             'on_channel': self.on_channel,
             'on_drop': self.on_drop,
             'on_inventory': self.on_inventory,
-            'on_channels': self.on_channels,  # Android-specific: push channel dict to ChannelsScreen when fetch completes
+            'on_channels': self.on_channels,
             'on_notify': self.on_notify,
         }
         self.twitch_client = TwitchClient(self.settings, callbacks)
         if self.settings.oauth_token:
-            self.screen_manager.current = 'home'
+            # Saved token found — show app shell immediately, validate in background
+            self.screen_manager.current = 'app'
+            self._start_login_validation()
         else:
             self.screen_manager.current = 'login'
+            self._start_device_login()
         Window.bind(on_keyboard=self.on_key_back)
         return self.screen_manager
+
+    def _start_device_login(self):
+        """Kick off the async device code OAuth flow in the background event loop."""
+        asyncio.run_coroutine_threadsafe(
+            self.twitch_client.start_device_login(), self.loop
+        )
+
+    def _start_login_validation(self):
+        """Validate the saved token in background; fall back to device login if invalid."""
+        async def _validate():
+            try:
+                await self.twitch_client.login()
+            except Exception:
+                # Token invalid or expired — switch to login screen and start fresh
+                Clock.schedule_once(lambda dt: self._switch_to_login())
+
+        asyncio.run_coroutine_threadsafe(_validate(), self.loop)
+
+    def _switch_to_login(self):
+        self.screen_manager.current = 'login'
+        self._start_device_login()
 
     def on_key_back(self, window, key, *args):
         if key == 27:  # Android back button / Escape
             current = self.screen_manager.current
-            if current in ('inventory', 'channels', 'settings', 'logs'):
-                self.screen_manager.current = 'home'
+            if current in ('channels', 'logs'):
+                self.screen_manager.current = 'app'
                 return True  # Consumed — don't exit
-            # On home or login, allow default (exit) behavior
+            # On 'app' or 'login', allow default (exit) behaviour
         return False
 
     def _update_ui(self, func, *args):
         Clock.schedule_once(lambda dt: func(*args))
+
+    # --- Login callbacks (device code flow) ---
+
+    def on_login_code(self, user_code, verification_uri):
+        """Called by TwitchClient when a new device code is ready; routes to LoginScreen."""
+        self._update_ui(
+            self.screen_manager.get_screen('login').show_login_code,
+            user_code, verification_uri
+        )
+
+    def on_login_success(self):
+        """Called by TwitchClient when the device code polling succeeds; navigate to AppScreen."""
+        Clock.schedule_once(lambda dt: setattr(self.screen_manager, 'current', 'app'))
+
+    # --- Mining state callbacks ---
 
     def on_print(self, message):
         logger.info(message)
@@ -81,32 +121,28 @@ class TwitchDropsMinerApp(MDApp):
         self._update_ui(self.screen_manager.get_screen('logs').add_log, message)
 
     def on_status(self, status):
-        self._update_ui(self.screen_manager.get_screen('home').update_status, status)
+        self._update_ui(self.screen_manager.get_screen('app').update_status, status)
 
     def on_progress(self, current, total):
-        self._update_ui(self.screen_manager.get_screen('home').update_progress, current, total)
+        self._update_ui(self.screen_manager.get_screen('app').update_progress, current, total)
 
     def on_channel(self, channel_name):
-        self._update_ui(self.screen_manager.get_screen('home').update_channel, channel_name)
+        self._update_ui(self.screen_manager.get_screen('app').update_channel, channel_name)
 
     def on_drop(self, drop):
-        self._update_ui(self.screen_manager.get_screen('home').update_drop, drop)
+        self._update_ui(self.screen_manager.get_screen('app').update_drop, drop)
 
     def on_inventory(self, inventory):
-        self._update_ui(self.screen_manager.get_screen('inventory').update_inventory, inventory)
+        self._update_ui(self.screen_manager.get_screen('app').update_inventory, inventory)
 
     def on_channels(self, channels):
         # Android-specific: push channel list to ChannelsScreen on main thread when fetch completes
         self._update_ui(self.screen_manager.get_screen('channels').update_channels, channels)
 
     def on_notify(self, title, message):
-        # Android-specific: KivyMD 2.x requires MDSnackbarText child widget
-        def _show_snackbar(dt, t=f"{title}: {message}"):
-            try:
-                MDSnackbar(MDSnackbarText(text=t)).open()
-            except Exception:
-                MDSnackbar(text=t).open()  # fallback for KivyMD 1.x
-        Clock.schedule_once(_show_snackbar)
+        # Android-specific: KivyMD 2.x — MDSnackbarText must be passed as child widget
+        t = f"{title}: {message}"
+        Clock.schedule_once(lambda dt: MDSnackbar(MDSnackbarText(text=t)).open())
 
     def start_mining(self):
         if self.twitch_client and not self.twitch_client._running:
@@ -116,36 +152,12 @@ class TwitchDropsMinerApp(MDApp):
         if self.twitch_client and self.twitch_client._running:
             asyncio.run_coroutine_threadsafe(self.twitch_client.stop(), self.loop)
 
-    def login(self, oauth_token):
-        self.settings.oauth_token = oauth_token
-        self.settings.save()
-
-        def _on_login_done(future):
-            try:
-                future.result()
-                def _navigate(dt):
-                    self.screen_manager.current = 'home'
-                Clock.schedule_once(_navigate)
-            except Exception as e:
-                error_msg = str(e)  # captura o valor antes da closure
-                def _show_error(dt, msg=error_msg):
-                    self.screen_manager.get_screen('login').show_error(msg)
-                Clock.schedule_once(_show_error)
-
-        # Android-specific: close the existing session first so get_session()
-        # rebuilds it with the new Authorization header from the saved token
-        async def _close_and_login():
-            await self.twitch_client.close_session()
-            return await self.twitch_client.login()
-
-        future = asyncio.run_coroutine_threadsafe(_close_and_login(), self.loop)
-        future.add_done_callback(_on_login_done)
-
     def logout(self):
         self.stop_mining()
         self.settings.oauth_token = ""
         self.settings.save()
         self.screen_manager.current = 'login'
+        self._start_device_login()
 
     def on_stop(self):
         # Android-specific: schedule a clean shutdown coroutine on the event loop.

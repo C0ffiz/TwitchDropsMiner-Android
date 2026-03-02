@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,txt
 
 version = 0.1
-requirements = python3,kivy,kivymd,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict
+requirements = python3,kivy,kivymd,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,apprise
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,FOREGROUND_SERVICE,POST_NOTIFICATIONS,WAKE_LOCK,RECEIVE_BOOT_COMPLETED
 
