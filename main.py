@@ -49,6 +49,7 @@ class TwitchDropsMinerApp(MDApp):
             'on_channel': self.on_channel,
             'on_drop': self.on_drop,
             'on_inventory': self.on_inventory,
+            'on_channels': self.on_channels,  # Android-specific: push channel dict to ChannelsScreen when fetch completes
             'on_notify': self.on_notify,
         }
         self.twitch_client = TwitchClient(self.settings, callbacks)
@@ -93,6 +94,10 @@ class TwitchDropsMinerApp(MDApp):
 
     def on_inventory(self, inventory):
         self._update_ui(self.screen_manager.get_screen('inventory').update_inventory, inventory)
+
+    def on_channels(self, channels):
+        # Android-specific: push channel list to ChannelsScreen on main thread when fetch completes
+        self._update_ui(self.screen_manager.get_screen('channels').update_channels, channels)
 
     def on_notify(self, title, message):
         # Android-specific: KivyMD 2.x requires MDSnackbarText child widget

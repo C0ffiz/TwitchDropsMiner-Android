@@ -142,6 +142,10 @@ class TwitchClient:
         """Update inventory in UI."""
         self._callback('on_inventory', self.inventory)
 
+    def update_channels(self) -> None:
+        """Update channels in UI."""
+        self._callback('on_channels', self.channels)  # Android-specific: push channel dict to ChannelsScreen
+
     def notify(self, title: str, message: str):
         """Show notification."""
         self._callback('on_notify', title, message)
@@ -1009,6 +1013,7 @@ class TwitchClient:
                             if active_drop is not None:
                                 active_drop.display(countdown=False, subone=True)
                         break
+                self.update_channels()  # Android-specific: push populated channel dict to UI after fetch
                 self.change_state(State.CHANNEL_SWITCH)
 
             elif self.state is State.CHANNEL_SWITCH:

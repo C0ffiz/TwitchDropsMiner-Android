@@ -205,18 +205,19 @@ class ChannelsScreen(BaseScreen):
         self.layout.add_widget(scroll)
 
     def on_enter(self, *args):
-        # Android-specific: rebuild live channel list every time the screen is entered
+        # Android-specific: rebuild on enter in case user opens screen before push callback fires
+        channels = self.app.twitch_client.channels if self.app.twitch_client else {}
+        self.update_channels(channels)
+
+    def update_channels(self, channels):
+        # Android-specific: called by main.py on_channels when fetch completes; rebuilds list on main thread
         self.list_view.clear_widgets()
-        channels = (
-            list(self.app.twitch_client.channels.values())
-            if self.app.twitch_client else []
-        )
         if not channels:
             item = MDListItem()
             item.add_widget(MDListItemHeadlineText(text="No channels loaded"))
             self.list_view.add_widget(item)
             return
-        for channel in channels:
+        for channel in channels.values():
             item = MDListItem()
             item.add_widget(MDListItemHeadlineText(text=channel.name))
             viewers = channel._stream.viewers if channel._stream else 0
