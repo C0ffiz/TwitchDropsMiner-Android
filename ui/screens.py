@@ -71,7 +71,7 @@ class HomeScreen(BaseScreen):
         drop_card.add_widget(MDLabel(text="Current Drop", font_style="Title", role="large"))
         self.drop_label = MDLabel(text=self.drop_text)
         drop_card.add_widget(self.drop_label)
-        self.progress_bar = MDLinearProgressIndicator(value=self.progress_value, size_hint_y=None, height=dp(4))
+        self.progress_bar = MDLinearProgressIndicator(size_hint_y=None, height=dp(4))
         drop_card.add_widget(self.progress_bar)
         content.add_widget(drop_card)
 
@@ -132,7 +132,9 @@ class HomeScreen(BaseScreen):
         if tc is None:
             return
         self.update_drop(tc.current_drop)
-        self.update_channel(tc.watching_channel.get_with_default("") or "")
+        # Android-specific: get_with_default returns Channel or None; extract display_name for the label
+        ch = tc.watching_channel.get_with_default(None)
+        self.update_channel(ch.display_name if ch else "")
 
 
 class LoginScreen(BaseScreen):

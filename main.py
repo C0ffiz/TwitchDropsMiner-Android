@@ -5,7 +5,6 @@ import threading
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
-from kivy.utils import platform
 from kivymd.app import MDApp
 from kivymd.uix.snackbar import MDSnackbar, MDSnackbarText  # Android-specific: KivyMD 2.x API
 from core.settings import Settings
