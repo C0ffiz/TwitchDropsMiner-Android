@@ -13,11 +13,12 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_
 
 android.api = 33
 android.minapi = 21
-android.sdk = 33
 android.ndk = 23b
 android.ndk_api = 21
+android.archs = armeabi-v7a
 
-android.arch = armeabi-v7a
+android.sdk_path = /home/runner/android-sdk
+android.ndk_path = /home/runner/android-sdk/ndk/23.1.7779620
 
 p4a.branch = master
 

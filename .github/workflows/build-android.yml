@@ -58,9 +58,9 @@ jobs:
           path: |
             ~/.cache/pip
             ./.buildozer/android/platform
-          key: ${{ runner.os }}-pypi-${{ hashFiles('**/requirements.txt') }}
+          key: v2-${{ runner.os }}-pypi-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pypi-
+            v2-${{ runner.os }}-pypi-
 
       - name: Create and activate virtualenv
         run: |
@@ -93,6 +93,9 @@ jobs:
           set -x
           source .venv/bin/activate
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export ANDROID_HOME="${HOME}/android-sdk"
+          export ANDROID_SDK_ROOT="${HOME}/android-sdk"
+          export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/23.1.7779620"
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
