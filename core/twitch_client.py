@@ -198,6 +198,8 @@ class TwitchClient:
         """
         backoff = ExponentialBackoff(maximum=60)
         single_retry: bool = True
+        max_retries: int = 5  # Android-specific: cap forced retries to avoid infinite loop
+        retry_count: int = 0
         for delay in backoff:
             async with self._gql_limiter:
                 session = await self.get_session()
@@ -225,6 +227,9 @@ class TwitchClient:
                     if force_retry:
                         break
             if force_retry:
+                retry_count += 1
+                if retry_count >= max_retries:  # Android-specific: cap retries; ExponentialBackoff never stops
+                    raise MinerException("GQL request failed after retries")
                 single_retry = False
                 continue
             return response_json
@@ -892,7 +897,7 @@ class TwitchClient:
                     if (
                         game not in self.wanted_games
                         and game.name not in exclude
-                        and game.name in priority
+                        and (not priority or game.name in priority)  # Android-specific: empty priority = all games
                         and campaign.eligible
                         and campaign.can_earn_within(next_hour)
                     ):

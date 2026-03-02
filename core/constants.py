@@ -21,12 +21,6 @@ if TYPE_CHECKING:
 from core.version import VERSION, __version__
 
 # ---------------------------------------------------------------------------
-# Custom logging level — must be registered before any logger uses it
-# ---------------------------------------------------------------------------
-CALL: int = logging.INFO - 1
-logging.addLevelName(CALL, "CALL")
-
-# ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
 JsonType = Dict[str, Any]

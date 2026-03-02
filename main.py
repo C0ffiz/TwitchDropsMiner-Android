@@ -22,7 +22,7 @@ class TwitchDropsMinerApp(MDApp):
         self.title = "TwitchDropsMiner"
         self.theme_cls.primary_palette = "Purple"
         self.theme_cls.theme_style = "Dark"
-        self.settings = Settings()
+        self.settings = None  # Android-specific: deferred — Settings() needs App running for get_app_paths()
         self.twitch_client = None
         self.screen_manager = None
         self.logs = []
@@ -35,6 +35,7 @@ class TwitchDropsMinerApp(MDApp):
         self.loop.run_forever()
 
     def build(self):
+        self.settings = Settings()  # Android-specific: deferred — App must be running for get_app_paths()
         self.screen_manager = ScreenManager()
         self.screen_manager.add_widget(HomeScreen(name='home'))
         self.screen_manager.add_widget(LoginScreen(name='login'))
