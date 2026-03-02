@@ -43,10 +43,10 @@ jobs:
           rm -rf cmdline-tools.zip cmdline-tools-tmp
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
           yes 2>/dev/null | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
-          sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;23.1.7779620" "cmake;3.22.1"
+          sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" "cmake;3.22.1"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/23.1.7779620" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_HOME}/platform-tools" >> $GITHUB_PATH
@@ -103,7 +103,7 @@ jobs:
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export ANDROID_HOME="${HOME}/android-sdk"
           export ANDROID_SDK_ROOT="${HOME}/android-sdk"
-          export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/23.1.7779620"
+          export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/25.1.8937393"
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
