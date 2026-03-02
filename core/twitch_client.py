@@ -204,10 +204,17 @@ class TwitchClient:
         single_retry: bool = True
         max_retries: int = 5  # Android-specific: cap forced retries to avoid infinite loop
         retry_count: int = 0
+        # Android-specific: normalize GQLOperation (dict subclass) to plain dict/list
+        # so aiohttp's JSON encoder always receives a standard serializable type
+        if isinstance(ops, list):
+            payload = [dict(o) for o in ops]
+        else:
+            payload = dict(ops)
         for delay in backoff:
             async with self._gql_limiter:
                 session = await self.get_session()
-                async with session.post(GQL_URL, json=ops) as response:
+                logger.debug(f"GQL request payload: {payload}")
+                async with session.post(GQL_URL, json=payload) as response:
                     if response.status == 401:
                         raise LoginException("Authentication failed")
                     response_json = await response.json()
