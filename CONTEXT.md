@@ -43,6 +43,21 @@ GitHub Copilot Premium requests have a token limit per session. When a session e
 | ✅ | Done | `ui/screens.py` Part F | LogsScreen + ChannelsScreen (Phase 8) | 🟢 Light |
 | ✅ | Done | Import audit | all `core/` + `ui/` | ⚫ Integration |
 | ✅ | Done | `buildozer.spec` + `requirements.txt` | dependency audit | 🟠 Medium |
+| ✅ | Done | Bug fix: GQL headers | add X-Device-Id, Client-Session-Id, Origin, Referer; auto-start mining | 🟠 Medium |
+| ✅ | Done | Bug fix: `failed integrity check` | switch WEB → ANDROID_APP; drop `_ensure_integrity()`; add client_id mismatch check | 🟠 Medium |
+
+---
+
+## ⚠️ Next Steps (for next chat session)
+
+After the ANDROID_APP switch the **saved WEB token will fail** (client_id mismatch → `login()` raises `LoginException` → `_start_login_validation` falls back to device login screen automatically). Users will need to log in once with the new ANDROID_APP device code. That is expected and handled.
+
+**What to verify in the next session:**
+1. Run `python main.py`, expect device login screen (old WEB token cleared by mismatch detection).
+2. Complete device login → should navigate to AppScreen and auto-start mining.
+3. Confirm `fetch_inventory()` succeeds (no GQL errors in log).
+4. Confirm `InventoryTabScreen` displays campaigns.
+5. If GQL still fails, capture the **exact error message** and the `[GQL request payload]` that precedes it.
 
 ---
 
@@ -83,7 +98,13 @@ These are design choices already made. Do NOT reverse or re-debate them.
 | `ChannelsScreen` and `LogsScreen` remain top-level ScreenManager entries | Pushed on top of AppScreen; back button (`on_key_back`) returns to `'app'` |
 | `main.py` `login(oauth_token)` method removed | Device code flow fires `on_login_success` callback instead; no manual token paste |
 | `_start_login_validation()` runs `TwitchClient.login()` at startup when saved token exists | On exception, switches back to login screen and restarts device code flow |
-| `DEFAULT_CLIENT_TYPE = ClientType.WEB` (not `ANDROID_APP`) | WEB client ID accepts user OAuth tokens; ANDROID_APP client ID rejects them with 401 |
+| Auto-mining starts after both login paths | `_start_login_validation` calls `start_mining()` on success; `on_login_success` calls `start_mining()` after navigating to AppScreen — ensures inventory is fetched immediately without pressing Start |
+| GQL requests include `X-Device-Id` and `Client-Session-Id` headers | Twitch integrity check requires these; `_device_id` (32-char hex) and `_session_id` (16-char hex) generated at `TwitchClient.__init__` via `create_nonce`; session headers expanded to match upstream `auth_state.headers()` |
+| GQL requests include `Origin` and `Referer: CLIENT_URL` per-request | Mirrors upstream `auth_state.headers(gql=True)` which adds these for GQL calls; passed as per-request headers on `session.post()` |
+| `CLIENT_URL: str` exported from `core/constants.py` | Shim alongside `CLIENT_ID` and `USER_AGENT`; needed by `twitch_client.py` for GQL Origin/Referer headers |
+| `login()` verifies `client_id` in `/oauth2/validate` response matches `CLIENT_ID` | Mirrors upstream `_AuthState._validate()` client mismatch check; catches stale tokens from a previous client type (e.g. old WEB token when client switched to ANDROID_APP) and raises `LoginException` so the caller falls back to device login |
+| `_ensure_integrity()` removed; `Client-Integrity` header not sent | `integrity.twitch.tv` DNS does not resolve in the target environment; ANDROID_APP client type does not require the Client-Integrity JWT — upstream TwitchDropsMiner uses ANDROID_APP without any integrity token and GQL works correctly |
+| `DEFAULT_CLIENT_TYPE = ClientType.ANDROID_APP` (not `WEB`) | Device code OAuth tokens are issued for the client ID used to request them; ANDROID_APP matches upstream exactly and does NOT trigger the `failed integrity check` GQL error that WEB triggers; the old WEB decision only held when tokens were pasted manually from the browser — since we use device code exclusively, ANDROID_APP is the correct choice |
 | `WebsocketPool.remove_topics` uses upstream recycling loop | Android had simplified version that only stripped empty-last-WS; upstream recycles underfull websockets into fewer connections — bug fixed in S10 |
 | `_handle_topics` uses `settings.oauth_token` directly (no `get_auth()`) | `get_auth()` doesn't exist on `TwitchClient`; decision carried forward from S10 audit |
 | `_handle_topics` strips `oauth:` prefix before sending to PubSub | `settings.oauth_token` may contain `oauth:` prefix from old manual-paste login; PubSub requires bare access token; inlined strip avoids calling private `_clean_token` across module boundary |

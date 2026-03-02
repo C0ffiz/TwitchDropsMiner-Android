@@ -75,6 +75,8 @@ class TwitchDropsMinerApp(MDApp):
         async def _validate():
             try:
                 await self.twitch_client.login()
+                # Token valid — auto-start mining so inventory is fetched immediately
+                Clock.schedule_once(lambda dt: self.start_mining())
             except Exception:
                 # Token invalid or expired — switch to login screen and start fresh
                 Clock.schedule_once(lambda dt: self._switch_to_login())
@@ -108,7 +110,10 @@ class TwitchDropsMinerApp(MDApp):
 
     def on_login_success(self):
         """Called by TwitchClient when the device code polling succeeds; navigate to AppScreen."""
-        Clock.schedule_once(lambda dt: setattr(self.screen_manager, 'current', 'app'))
+        def _navigate_and_start(dt):
+            self.screen_manager.current = 'app'
+            self.start_mining()
+        Clock.schedule_once(_navigate_and_start)
 
     # --- Mining state callbacks ---
 

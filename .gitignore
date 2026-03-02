@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+bin/
+.buildozer/
+build/
+dist/
+*.apk
+*.aab
+
+# Logs / debug output
+*.log
+run_output.txt
+buildozer_output.log
+build_debug_combined.zip
+combined_logs.txt
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

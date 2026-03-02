@@ -248,12 +248,13 @@ class ClientType:
 # Android-specific: use WEB client type so user OAuth tokens (from twitchtokengenerator.com)
 # are accepted by Twitch GQL. ANDROID_APP client ID is an official Twitch app and rejects
 # third-party user tokens with 401. WEB client ID matches the upstream TwitchDropsMiner.
-DEFAULT_CLIENT_TYPE: ClientInfo = ClientType.WEB  # Android-specific: WEB required for user OAuth tokens
+DEFAULT_CLIENT_TYPE: ClientInfo = ClientType.ANDROID_APP  # Device code OAuth; matches upstream; no Client-Integrity required
 
 # Backward-compatible shims — kept so existing code importing CLIENT_ID / USER_AGENT
 # directly continues to work until it is updated to use DEFAULT_CLIENT_TYPE.
 CLIENT_ID: str = DEFAULT_CLIENT_TYPE.CLIENT_ID   # Android-specific: shim
 USER_AGENT: str = DEFAULT_CLIENT_TYPE.USER_AGENT  # Android-specific: shim
+CLIENT_URL: str = DEFAULT_CLIENT_TYPE.CLIENT_URL  # Android-specific: shim
 
 # ---------------------------------------------------------------------------
 # State machine

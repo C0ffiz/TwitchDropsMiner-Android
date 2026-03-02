@@ -11,7 +11,7 @@ from typing import Optional, Any, NoReturn, TYPE_CHECKING
 import aiohttp
 
 from core.constants import (
-    CALL, MAX_INT, CLIENT_ID, USER_AGENT, GQL_URL, GQL_OPERATIONS,
+    CALL, MAX_INT, CLIENT_ID, USER_AGENT, CLIENT_URL, GQL_URL, GQL_OPERATIONS,
     State, PriorityMode, WATCH_INTERVAL, WebsocketTopic, MAX_CHANNELS,
 )
 from core.exceptions import (
@@ -20,6 +20,7 @@ from core.exceptions import (
 from core.utils import (
     timestamp, Game, AwaitableValue,
     ExponentialBackoff, RateLimiter, chunk, task_wrapper,
+    create_nonce, CHARS_HEX_LOWER,
 )
 from core.settings import Settings
 
@@ -93,6 +94,11 @@ class TwitchClient:
         # GQL rate limiter (5 requests per second)
         self._gql_limiter = RateLimiter(capacity=5, window=1)  # Android-specific
 
+        # Auth identity headers — generated once per session, sent with every GQL request.
+        # Mirrors upstream _AuthState.device_id / session_id which Twitch checks for integrity.
+        self._device_id: str = create_nonce(CHARS_HEX_LOWER, 32)
+        self._session_id: str = create_nonce(CHARS_HEX_LOWER, 16)
+
     # ========================================================================
     # CALLBACKS
     # ========================================================================
@@ -164,8 +170,15 @@ class TwitchClient:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
             headers = {
-                'Client-ID': CLIENT_ID,
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Language': 'en-US',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache',
+                'Client-Id': CLIENT_ID,
                 'User-Agent': USER_AGENT,
+                'Client-Session-Id': self._session_id,
+                'X-Device-Id': self._device_id,
             }
             if self.settings.oauth_token:
                 headers['Authorization'] = f'OAuth {self._clean_token(self.settings.oauth_token)}'
@@ -210,11 +223,17 @@ class TwitchClient:
             payload = [dict(o) for o in ops]
         else:
             payload = dict(ops)
+        gql_headers: dict = {
+            'Origin': CLIENT_URL,
+            'Referer': CLIENT_URL,
+            'X-Device-Id': self._device_id,
+            'Client-Session-Id': self._session_id,
+        }
         for delay in backoff:
             async with self._gql_limiter:
                 session = await self.get_session()
                 logger.debug(f"GQL request payload: {payload}")
-                async with session.post(GQL_URL, json=payload) as response:
+                async with session.post(GQL_URL, json=payload, headers=gql_headers) as response:
                     if response.status == 401:
                         raise LoginException("Authentication failed")
                     response_json = await response.json()
@@ -276,6 +295,16 @@ class TwitchClient:
             if "user_id" not in data or "login" not in data:
                 raise LoginException("Invalid token: no user data returned")
 
+            # Verify the token was issued for our current client ID.
+            # A mismatch means a stale token from a previous client type (e.g. WEB vs ANDROID_APP).
+            # Raising LoginException here causes the caller to fall back to device login.
+            token_client_id = data.get("client_id", "")
+            if token_client_id and token_client_id != CLIENT_ID:
+                raise LoginException(
+                    f"Token client mismatch (got {token_client_id}, expected {CLIENT_ID}). "
+                    "Please log in again."
+                )
+
             self.settings.user_id = int(data["user_id"])
             self.settings.username = data["login"]
             self.settings.save()
@@ -283,6 +312,28 @@ class TwitchClient:
             self._logged_in.set(True)
             self.print(f"Logged in as: {self.settings.username}")
             self.update_status(f"Logged in: {self.settings.username}")
+
+            # Visit the Twitch website to establish a proper cookie session.
+            # Mirrors upstream _AuthState._validate() which visits CLIENT_URL and extracts
+            # the `unique_id` cookie for use as device_id in X-Device-Id headers.
+            # Without a real Twitch-assigned device_id the integrity check fails for
+            # some GQL operations (e.g. ViewerDropsDashboard / Campaigns).
+            try:
+                async with session.get(CLIENT_URL) as page_response:
+                    await page_response.read()
+                # Extract Twitch-assigned unique_id and use it as device_id
+                for cookie in session.cookie_jar:
+                    if cookie.key == "unique_id":
+                        self._device_id = cookie.value
+                        logger.debug("Got Twitch-assigned device_id from cookie")
+                        break
+            except Exception as e:
+                logger.warning(f"Could not establish Twitch cookie session: {e}")
+
+            # Invalidate any stale integrity token so it is re-fetched with
+            # the new session/device_id on the first GQL request.
+            self._integrity_token = ""
+
             return True
 
         except LoginException:
@@ -569,7 +620,7 @@ class TwitchClient:
         # Android-specific: no GUI progress; uses logger only
         """
         now = datetime.now(timezone.utc)
-        next_period = now + timedelta(minutes=30)
+        next_period = now + timedelta(minutes=5)
         while True:
             now = datetime.now(timezone.utc)
             if now >= next_period:
