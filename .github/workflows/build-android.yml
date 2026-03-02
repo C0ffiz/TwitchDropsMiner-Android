@@ -42,8 +42,8 @@ jobs:
           mv cmdline-tools-tmp/cmdline-tools/* cmdline-tools/latest/ || true
           rm -rf cmdline-tools.zip cmdline-tools-tmp
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
-          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;23.1.7779620" "cmake;3.22.1"
-          yes | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
+          sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;23.1.7779620" "cmake;3.22.1"
+          yes 2>/dev/null | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses; true
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/23.1.7779620" >> $GITHUB_ENV
