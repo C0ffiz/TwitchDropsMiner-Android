@@ -135,6 +135,7 @@ class TwitchClient:
 
     def update_drop(self, drop: Optional[TimedDrop]):
         """Update current drop in UI."""
+        self.current_drop = drop  # Android-specific: keep current_drop in sync for HomeScreen.on_enter re-sync
         self._callback('on_drop', drop)
 
     def update_inventory(self):
