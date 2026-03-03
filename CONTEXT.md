@@ -312,7 +312,8 @@ ScreenManager
 | `WRITE_EXTERNAL_STORAGE`/`READ_EXTERNAL_STORAGE` removed from permissions | Deprecated API 29+, ignored on API 33+; no code path uses external storage — all I/O uses `user_data_dir` |
 | `source.exclude_dirs = venv` added to `buildozer.spec` | Ensures entire `venv/` tree is excluded; `venv/*` pattern only excluded top-level children |
 | `ssl.create_default_context(cafile=certifi.where())` + `aiohttp.TCPConnector(ssl=...)` | p4a's OpenSSL does not see Android system CA store; explicit certifi bundle required for all HTTPS/WSS |
-| `cython>=3.0.0,<4.0.0` in CI (was `cython==0.29.37`) | Kivy 2.3.0 p4a recipe requires Cython 3.x; 0.29.x fails to compile Kivy `.pyx` files |
+| `cython==0.29.37` pinned in CI (not 3.x) | `pyjnius` (p4a recipe) is incompatible with Cython 3; run #50 confirmed 0.29.37 works; Cython 3.x broke pyjnius compilation — reverted after run #51 failure |
+| `android.sdk_path`/`android.ndk_path` injected at CI runtime via `sed`+`echo` | Buildozer ignores `ANDROID_HOME` env var and downloads its own SDK when `android.sdk_path` is absent; hardcoding CI paths in `buildozer.spec` breaks local builds — injecting at runtime is the correct middle ground |
 | `buildozer>=1.5.0`, `python-for-android>=2023.9.0,<2025.0.0` pinned in CI | Unpinned `--upgrade` installs caused non-reproducible builds on breaking p4a HEAD changes |
 | `platforms;android-34` + `build-tools;34.0.0` installed in CI | Required to compile against `android.api = 34`; was android-33/33.0.2 |
 | `on_start()` requests `Permission.POST_NOTIFICATIONS` at runtime | Android 13+ requires runtime grant; manifest declaration alone is silent-fail |

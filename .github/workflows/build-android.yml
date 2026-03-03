@@ -75,7 +75,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install --upgrade pip
-          pip install "buildozer>=1.5.0" "cython>=3.0.0,<4.0.0"
+          pip install "buildozer>=1.5.0" "cython==0.29.37"
           pip install "python-for-android>=2023.9.0,<2025.0.0"
         shell: bash
 
@@ -104,6 +104,11 @@ jobs:
           export ANDROID_HOME="${HOME}/android-sdk"
           export ANDROID_SDK_ROOT="${HOME}/android-sdk"
           export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/25.1.8937393"
+          # Inject SDK/NDK paths so Buildozer uses the pre-installed SDK instead
+          # of downloading its own copy into ~/.buildozer/android/platform/
+          sed -i '/^android\.sdk_path/d; /^android\.ndk_path/d' buildozer.spec
+          echo "android.sdk_path = ${ANDROID_HOME}" >> buildozer.spec
+          echo "android.ndk_path = ${ANDROID_NDK_HOME}" >> buildozer.spec
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
