@@ -164,6 +164,18 @@ class TwitchDropsMinerApp(MDApp):
         self.screen_manager.current = 'login'
         self._start_device_login()
 
+    def on_start(self):
+        """Request POST_NOTIFICATIONS runtime permission on Android 13+ (API 33+)."""
+        try:
+            from android.permissions import request_permissions, Permission  # type: ignore[import]
+            perms = []
+            if hasattr(Permission, 'POST_NOTIFICATIONS'):
+                perms.append(Permission.POST_NOTIFICATIONS)
+            if perms:
+                request_permissions(perms)
+        except ImportError:
+            pass  # Not running on Android
+
     def on_stop(self):
         # Android-specific: schedule a clean shutdown coroutine on the event loop.
         # stop() cancels tasks and closes the session before we halt the loop.
@@ -175,7 +187,9 @@ class TwitchDropsMinerApp(MDApp):
             self.loop.stop()
 
         asyncio.run_coroutine_threadsafe(_stop_then_halt(), self.loop)
-        self.async_thread.join(timeout=5)  # Android-specific: wait for clean shutdown
+        self.async_thread.join(timeout=3)  # Keep under Android ANR watchdog threshold
+        if self.async_thread.is_alive():
+            logger.warning("on_stop: async thread did not exit cleanly within timeout")
 
 
 def main():

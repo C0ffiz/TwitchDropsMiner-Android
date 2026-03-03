@@ -478,13 +478,16 @@ class AppScreen(Screen):
             self.tab_manager.add_widget(tab)
         outer.add_widget(self.tab_manager)
 
-        nav_bar = MDNavigationBar(
+        # MDNavigationBar.__init__ does not accept positional children (Kivy Widget API);
+        # items must be added via add_widget() after construction.
+        nav_bar = MDNavigationBar(on_switch_tabs=self._on_switch_tabs)
+        for _item in (
             _NavItem(icon='home', text='Main', active=True),
             _NavItem(icon='gift-outline', text='Inventory'),
             _NavItem(icon='cog', text='Settings'),
             _NavItem(icon='help-circle', text='Help'),
-            on_switch_tabs=self._on_switch_tabs,
-        )
+        ):
+            nav_bar.add_widget(_item)
         outer.add_widget(nav_bar)
 
     def _on_switch_tabs(self, bar, item, item_icon, item_text):

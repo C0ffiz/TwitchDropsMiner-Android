@@ -43,7 +43,7 @@ jobs:
           rm -rf cmdline-tools.zip cmdline-tools-tmp
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
           yes 2>/dev/null | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
-          sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" "cmake;3.22.1"
+          sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393" "cmake;3.22.1"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.1.8937393" >> $GITHUB_ENV
@@ -75,8 +75,8 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install --upgrade pip
-          pip install buildozer "cython==0.29.37"
-          pip install --upgrade python-for-android
+          pip install "buildozer>=1.5.0" "cython>=3.0.0,<4.0.0"
+          pip install "python-for-android>=2023.9.0,<2025.0.0"
         shell: bash
 
       - name: Print environment (debug)

@@ -305,3 +305,69 @@ ScreenManager
 | `requests` removed from `requirements.txt` | Never imported; project uses `aiohttp` exclusively; was copied verbatim from upstream |
 | `pyjnius` removed from `requirements.txt` | It is a p4a recipe, not a pip package; it cannot install on a Windows dev machine; remains in `buildozer.spec` requirements where it belongs |
 | `apprise>=1.9.0` added to `requirements.txt` | Mirrors the addition to `buildozer.spec`; allows local dev/testing of webhook notification paths |
+| `apprise` removed from `buildozer.spec` requirements | No p4a recipe; C-extension deps fail cross-compile; `notifications.py` already guards with `_APPRISE_AVAILABLE`; plyer handles on-device notifications |
+| `android.archs = arm64-v8a` (was armeabi-v7a) | Samsung S23 FE (Snapdragon 8 Gen 1) is 64-bit only; Android 14 One UI 6.1 has no 32-bit userspace; 32-bit-only APK rejected by Package Manager |
+| `android.api = 34`, `android.minapi = 24`, `android.ndk_api = 24` | Targets Android 14 requirements; minapi 24 aligns with Kivy's real minimum and avoids ndk_api mismatch |
+| `package.domain = io.github.c0ffiz` | `org.example` is a placeholder; changed to GitHub-convention domain before any distribution |
+| `WRITE_EXTERNAL_STORAGE`/`READ_EXTERNAL_STORAGE` removed from permissions | Deprecated API 29+, ignored on API 33+; no code path uses external storage — all I/O uses `user_data_dir` |
+| `source.exclude_dirs = venv` added to `buildozer.spec` | Ensures entire `venv/` tree is excluded; `venv/*` pattern only excluded top-level children |
+| `ssl.create_default_context(cafile=certifi.where())` + `aiohttp.TCPConnector(ssl=...)` | p4a's OpenSSL does not see Android system CA store; explicit certifi bundle required for all HTTPS/WSS |
+| `cython>=3.0.0,<4.0.0` in CI (was `cython==0.29.37`) | Kivy 2.3.0 p4a recipe requires Cython 3.x; 0.29.x fails to compile Kivy `.pyx` files |
+| `buildozer>=1.5.0`, `python-for-android>=2023.9.0,<2025.0.0` pinned in CI | Unpinned `--upgrade` installs caused non-reproducible builds on breaking p4a HEAD changes |
+| `platforms;android-34` + `build-tools;34.0.0` installed in CI | Required to compile against `android.api = 34`; was android-33/33.0.2 |
+| `on_start()` requests `Permission.POST_NOTIFICATIONS` at runtime | Android 13+ requires runtime grant; manifest declaration alone is silent-fail |
+| `on_stop()` join timeout reduced 5 s → 3 s with alive-check warning | Stays under Android ANR watchdog threshold; logs warning instead of silently timing out |
+| `MDNavigationBar` constructed with `add_widget()` loop (not positional args) | Kivy `Widget.__init__(**kwargs)` does not accept positional children; positional pattern raises `TypeError` at app start |
+
+---
+
+## 🛠️ Android Compatibility Remediation Plan
+
+### Root Cause Statement
+
+The error **"Este app não é compatível com a versão mais recente do Android"** on the Samsung Galaxy S23 FE (Android 14 / One UI 6.1) was caused by a **CPU architecture mismatch**.
+
+The build targeted `android.archs = armeabi-v7a` (32-bit ARM only). The Samsung Galaxy S23 FE uses a Snapdragon 8 Gen 1 SoC which is `arm64-v8a` (64-bit ARM). Samsung's Android 14 ships without 32-bit userspace libraries on this device. The Package Manager rejected the APK with the "not compatible" dialog before any Python code ran.
+
+**Primary fix:** `android.archs = arm64-v8a` — **✅ DONE**
+
+**Secondary blockers fixed in the same pass:**
+- Missing certifi SSL context → all HTTPS/WSS fails on Android (✅ DONE)
+- Cython 0.29.x incompatible with Kivy 2.3.0 p4a recipe (✅ DONE)
+- MDNavigationBar positional-arg constructor crash at startup (✅ DONE)
+
+---
+
+### Implementation Status Table
+
+| Step | ID | Priority | Layer | Change | File(s) | Done? |
+|---|---|---|---|---|---|---|
+| 1 | S-ABI | 🔴 BLOCKER | Build | `android.archs = arm64-v8a` | `buildozer.spec` | ✅ |
+| 2 | S-SSL | 🔴 BLOCKER | Network | certifi SSL context in `get_session()` | `core/twitch_client.py` | ✅ |
+| 3 | S-API34 | 🟠 HIGH | Build/Manifest | `android.api = 34`; CI installs `platforms;android-34` | `buildozer.spec`, `build-android.yml` | ✅ |
+| 4 | S-APPRISE | 🟠 HIGH | Build | Remove `apprise` from `buildozer.spec` requirements | `buildozer.spec` | ✅ |
+| 5 | S-CYTHON | 🟠 HIGH | Build | `cython>=3.0.0,<4.0.0` in CI | `build-android.yml` | ✅ |
+| 6 | S-P4A-PIN | 🟠 HIGH | Build | Pin `buildozer>=1.5.0`, `python-for-android>=2023.9.0` | `build-android.yml` | ✅ |
+| 7 | S-NOTIF-RT | 🟠 HIGH | Permissions | `on_start()` requests `POST_NOTIFICATIONS` at runtime | `main.py` | ✅ |
+| 8 | S-FGSTYPE | 🟠 HIGH | Manifest | Add `android:foregroundServiceType` when background service is added | `buildozer.spec` | ⏳ defer — no service declared yet |
+| 9 | S-STORAGE | 🟡 MEDIUM | Manifest | Remove `WRITE_EXTERNAL_STORAGE`/`READ_EXTERNAL_STORAGE` | `buildozer.spec` | ✅ |
+| 10 | S-VENV | 🟡 MEDIUM | Build | `source.exclude_dirs = venv` | `buildozer.spec` | ✅ |
+| 11 | S-P4A-BRANCH | 🟡 MEDIUM | Build | pip-pinned p4a supersedes `p4a.branch`; left as `master` | `buildozer.spec` | ✅ (via pip pin) |
+| 12 | S-DOMAIN | 🟡 MEDIUM | Manifest | `package.domain = io.github.c0ffiz` | `buildozer.spec` | ✅ |
+| 13 | S-NAVBAR | 🟡 MEDIUM | UI | `MDNavigationBar` built with `add_widget()` loop | `ui/screens.py` | ✅ |
+| 14 | S-MINAPI | 🟢 LOW | Manifest | `android.minapi = 24`, `android.ndk_api = 24` | `buildozer.spec` | ✅ |
+| 15 | S-PATHS | 🟢 LOW | Build | Remove hardcoded `android.sdk_path`/`android.ndk_path` | `buildozer.spec` | ✅ |
+| 16 | S-THEME | 🟢 LOW | UI | `"Purple"` palette — verify in KivyMD 2.x; change to `"DeepPurple"` if ValueError | `main.py` | ⏳ verify on first launch |
+| 17 | S-JOIN | 🟢 LOW | Threading | `join(timeout=3)` + alive-check warning | `main.py` | ✅ |
+
+### Post-fix Build Verification Checklist
+
+After the next GitHub Actions run, verify:
+
+1. `unzip -l app.apk | grep "lib/"` → only `lib/arm64-v8a/` entries
+2. `aapt dump badging app.apk | grep -E "targetSdk|minSdk"` → `targetSdkVersion:'34'`, `minSdkVersion:'24'`
+3. `aapt dump badging app.apk | grep "package: name="` → `io.github.c0ffiz.twitchdropsminer`
+4. Side-load on S23 FE → no "not compatible" dialog
+5. App opens to LoginScreen, completes device code login, navigates to AppScreen
+6. No `CERTIFICATE_VERIFY_FAILED` in LogsScreen
+7. Mining auto-starts after login; first notification shows Android permission dialog

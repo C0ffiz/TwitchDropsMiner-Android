@@ -2,6 +2,8 @@
 import asyncio
 import logging
 import json
+import ssl
+import certifi
 from time import time
 from collections import deque, OrderedDict
 from contextlib import asynccontextmanager, suppress
@@ -183,7 +185,11 @@ class TwitchClient:
             if self.settings.oauth_token:
                 headers['Authorization'] = f'OAuth {self._clean_token(self.settings.oauth_token)}'
 
-            self._session = aiohttp.ClientSession(headers=headers)
+            # Android-specific: p4a's OpenSSL doesn't use the Android system CA store;
+            # supply certifi's bundle explicitly so all HTTPS/WSS connections succeed.
+            _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            _connector = aiohttp.TCPConnector(ssl=_ssl_ctx)
+            self._session = aiohttp.ClientSession(connector=_connector, headers=headers)
         return self._session
 
     async def close_session(self):
