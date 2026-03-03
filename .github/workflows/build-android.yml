@@ -103,20 +103,10 @@ jobs:
           export ANDROID_SDK_ROOT="${HOME}/android-sdk"
           export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/25.1.8937393"
           # Inject SDK/NDK paths into the [app] section of buildozer.spec.
-          # Using Python to ensure values land before [buildozer], not after it
-          # (INI parsing assigns trailing lines to the last section seen).
-          python3 - <<'PYEOF'
-import re, os
-spec = open('buildozer.spec').read()
-spec = re.sub(r'^android\.sdk_path\s*=.*\n?', '', spec, flags=re.MULTILINE)
-spec = re.sub(r'^android\.ndk_path\s*=.*\n?', '', spec, flags=re.MULTILINE)
-sdk = os.environ['ANDROID_HOME']
-ndk = os.environ['ANDROID_NDK_HOME']
-spec = spec.replace('[buildozer]', f'android.sdk_path = {sdk}\nandroid.ndk_path = {ndk}\n\n[buildozer]')
-open('buildozer.spec', 'w').write(spec)
-print('--- injected buildozer.spec ---')
-print(open('buildozer.spec').read())
-PYEOF
+          # Done via an external script to avoid the bash-heredoc / YAML
+          # literal-block-scalar incompatibility (a heredoc closing delimiter
+          # at column 0 terminates the YAML run: block prematurely).
+          python3 ci/inject_sdk_paths.py
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
