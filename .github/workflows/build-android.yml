@@ -63,9 +63,7 @@ jobs:
       - name: Cache pip and .buildozer
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/pip
-            ./.buildozer/android/platform
+          path: ~/.cache/pip
           key: v2-${{ runner.os }}-pypi-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             v2-${{ runner.os }}-pypi-
@@ -104,11 +102,21 @@ jobs:
           export ANDROID_HOME="${HOME}/android-sdk"
           export ANDROID_SDK_ROOT="${HOME}/android-sdk"
           export ANDROID_NDK_HOME="${HOME}/android-sdk/ndk/25.1.8937393"
-          # Inject SDK/NDK paths so Buildozer uses the pre-installed SDK instead
-          # of downloading its own copy into ~/.buildozer/android/platform/
-          sed -i '/^android\.sdk_path/d; /^android\.ndk_path/d' buildozer.spec
-          echo "android.sdk_path = ${ANDROID_HOME}" >> buildozer.spec
-          echo "android.ndk_path = ${ANDROID_NDK_HOME}" >> buildozer.spec
+          # Inject SDK/NDK paths into the [app] section of buildozer.spec.
+          # Using Python to ensure values land before [buildozer], not after it
+          # (INI parsing assigns trailing lines to the last section seen).
+          python3 - <<'PYEOF'
+import re, os
+spec = open('buildozer.spec').read()
+spec = re.sub(r'^android\.sdk_path\s*=.*\n?', '', spec, flags=re.MULTILINE)
+spec = re.sub(r'^android\.ndk_path\s*=.*\n?', '', spec, flags=re.MULTILINE)
+sdk = os.environ['ANDROID_HOME']
+ndk = os.environ['ANDROID_NDK_HOME']
+spec = spec.replace('[buildozer]', f'android.sdk_path = {sdk}\nandroid.ndk_path = {ndk}\n\n[buildozer]')
+open('buildozer.spec', 'w').write(spec)
+print('--- injected buildozer.spec ---')
+print(open('buildozer.spec').read())
+PYEOF
           buildozer -v android debug 2>&1 | tee buildozer_output.log
         shell: bash
         timeout-minutes: 90
