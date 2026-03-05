@@ -218,19 +218,21 @@ class ForegroundServiceManager:
     # ── Android service lifecycle ─────────────────────────────────────────────
 
     def _start_android_service(self) -> None:
-        """Start service/main.py as an Android Foreground Service."""
-        if not _IS_ANDROID:
-            return
-        try:
-            from android import AndroidService  # type: ignore[import]
-            self._service = AndroidService(
-                "TwitchDropsMiner",
-                "Mining drops in background",
-            )
-            self._service.start("start")
-            logger.info("[FG] Android background service started")
-        except Exception as exc:
-            logger.warning("[FG] _start_android_service failed: %s", exc)
+        """
+        Start service/main.py as an Android Foreground Service.
+
+        Disabled until the CI rebuild lands with the patched manifest
+        (android:foregroundServiceType="dataSync") and PythonService.java
+        (3-arg startForeground).  Without those patches the service process
+        crashes immediately with MissingForegroundServiceTypeException /
+        IllegalArgumentException, which triggers an "App has stopped" dialog
+        for the user even though the main mining process is unaffected.
+
+        The wake lock and notification (managed below) still work from the
+        main activity process while the service is disabled.
+        """
+        logger.info("[FG] Android background service skipped (pending manifest rebuild)")
+        return
 
     def _stop_android_service(self) -> None:
         """Stop the Android Service."""
