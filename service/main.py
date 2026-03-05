@@ -6,18 +6,16 @@ This file is the entry-point for the p4a-generated Android Service
 
 Its sole job is to:
   1. Create the notification channel.
-  2. Override p4a's default foreground notification with our own branded one
-     (same channel/ID used by the activity to push status updates).
+  2. Call startForeground() with a branded notification.
   3. Loop forever so the Service object stays alive, which keeps the
-     owning process marked as a foreground-service process by Android —
-     the activity thread (mining loop) lives in the same process and
+     owning process marked as a foreground-service process by Android.
+     The activity thread (mining loop) lives in the same process and
      therefore also benefits from elevated OOM priority.
 
-Notification updates while mining are sent from the activity side via
-``NotificationManager.notify(NOTIFICATION_ID, new_notification)`` — no
-IPC required because both sides share the same Android NotificationManager.
+Notification content is updated from the activity side via
+NotificationManager.notify(NOTIFICATION_ID, new_notification).
+No IPC is needed because both sides share the same NotificationManager.
 """
-from __future__ import annotations
 
 import time
 import logging
@@ -46,7 +44,7 @@ def _start_foreground() -> None:
 
         Context = autoclass("android.content.Context")
         Build = autoclass("android.os.Build")
-        sdk_int: int = Build.VERSION.SDK_INT
+        sdk_int = Build.VERSION.SDK_INT
 
         # ── Notification channel (API 26 / Android 8+) ──────────────────────
         if sdk_int >= 26:
