@@ -3,12 +3,12 @@ import logging
 from kivy.clock import Clock
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
-from kivy.metrics import dp
+from kivy.metrics import dp, sp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
-from kivymd.uix.button import MDButton, MDButtonText
 from kivymd.uix.appbar import MDTopAppBar, MDTopAppBarTitle, MDTopAppBarLeadingButtonContainer, MDTopAppBarTrailingButtonContainer, MDActionTopAppBarButton
 from kivymd.uix.list import MDList, MDListItem, MDListItemHeadlineText, MDListItemSupportingText
 from kivymd.uix.navigationbar import MDNavigationBar, MDNavigationItem, MDNavigationItemIcon, MDNavigationItemLabel
@@ -121,19 +121,13 @@ class MainTabScreen(TabScreen):
         content.add_widget(drop_card)
 
         # Single mining toggle button — text synced with real mining state in on_enter()
-        self._mining_btn = MDButton(
-            style="filled",
+        self._mining_btn = Button(
+            text="Start Mining",
             size_hint=(1, None), height=dp(56),
+            background_normal='', background_color=(0.80, 0.40, 0.56, 1),
+            color=(1, 1, 1, 1), font_size=sp(16),
             on_release=self._toggle_mining
         )
-        self._mining_btn.theme_bg_color = "Custom"
-        self._mining_btn.md_bg_color = (0.91, 0.53, 0.64, 1)  # soft rose pink
-        self._mining_btn_lbl = MDButtonText(
-            text="Start Mining",
-            theme_text_color="Custom",
-            text_color=(1, 1, 1, 1),
-        )
-        self._mining_btn.add_widget(self._mining_btn_lbl)
         content.add_widget(self._mining_btn)
 
         scroll.add_widget(content)
@@ -150,7 +144,7 @@ class MainTabScreen(TabScreen):
         self._set_mining_btn(tc._running)  # sync toggle text with actual mining state
 
     def _set_mining_btn(self, running: bool):
-        self._mining_btn_lbl.text = "Stop Mining" if running else "Start Mining"
+        self._mining_btn.text = "Stop Mining" if running else "Start Mining"
 
     def _toggle_mining(self, *args):
         tc = self.app.twitch_client
@@ -256,10 +250,13 @@ class SettingsTabScreen(TabScreen):
         notif_row.add_widget(self.notif_switch)
         content.add_widget(notif_row)
 
-        logout_btn = MDButton(
-            size_hint_y=None, height=dp(50), on_release=lambda x: self.app.logout()
+        logout_btn = Button(
+            text="Logout",
+            size_hint=(1, None), height=dp(52),
+            background_normal='', background_color=(0.50, 0.10, 0.10, 1),
+            color=(1, 1, 1, 1), font_size=sp(16),
+            on_release=lambda x: self.app.logout()
         )
-        logout_btn.add_widget(MDButtonText(text="Logout"))
         content.add_widget(logout_btn)
 
         scroll.add_widget(content)
@@ -325,10 +322,13 @@ class HelpTabScreen(TabScreen):
         content.add_widget(MDLabel(
             text=help_text, size_hint_y=None, adaptive_height=True
         ))
-        github_btn = MDButton(
-            size_hint_y=None, height=dp(50), on_release=self._open_github
+        github_btn = Button(
+            text="Open on GitHub",
+            size_hint=(1, None), height=dp(52),
+            background_normal='', background_color=(0.13, 0.13, 0.13, 1),
+            color=(1, 1, 1, 1), font_size=sp(16),
+            on_release=self._open_github
         )
-        github_btn.add_widget(MDButtonText(text="Open on GitHub"))
         content.add_widget(github_btn)
 
         scroll.add_widget(content)
@@ -386,10 +386,13 @@ class LoginScreen(BaseScreen):
         content.add_widget(self.code_card)
 
         # Open browser button — invisible until code arrives
-        self.open_btn = MDButton(
-            size_hint=(1, None), height=dp(56), on_release=self._open_browser
+        self.open_btn = Button(
+            text="Open Twitch Website",
+            size_hint=(1, None), height=dp(56),
+            background_normal='', background_color=(0.40, 0.18, 0.72, 1),
+            color=(1, 1, 1, 1), font_size=sp(16),
+            on_release=self._open_browser
         )
-        self.open_btn.add_widget(MDButtonText(text="Open Twitch Website"))
         self.open_btn.opacity = 0
         self.open_btn.disabled = True
         content.add_widget(self.open_btn)
