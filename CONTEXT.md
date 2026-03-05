@@ -508,4 +508,16 @@ requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/mast
 
 **Rule for future deps with C extensions:** If a package has no p4a recipe and ships a `.so` (C extension), pip will install the x86_64 pre-built wheel on the CI runner → crash on arm64 device. Always check for a pure-Python version or find the package's p4a recipe. The `charset-normalizer==2.1.1` pin is the canonical example.
 
-**Current status (as of 2026-03-05):** App launches successfully on S23 FE ✅ (run 22703238467). Login flow / mining not yet end-to-end tested.
+**Current status (as of 2026-03-05, session 2):**
+- App launches ✅, login flow works end-to-end ✅ (run 22703238467 APK)
+- SSL fix applied to `start_device_login()` — certifi context added to auth sessions ✅
+- Device code obtained, user activated code, `on_login_success` fired, mining started ✅
+- Inventory: 75 campaigns loaded via GQL ✅
+- WebSocket: connected, topics subscribed ✅
+- All 4 bottom-nav tabs navigable: Main, Inventory, Settings, Help ✅; Channels screen ✅
+- Portrait orientation: `buildozer.spec android.orientation = portrait` added + jnius runtime lock in `main.py on_start()`; **build #22704096398 triggered** — run `.\deploy.ps1` when complete
+- LoginScreen redesigned: ScrollView + MDCard code display + "Connecting to Twitch…" initial state + `set_login_status()` error feedback
+
+**p4a adb push caveat discovered:** p4a runs the app entry point (`main.py`) from the pre-compiled `main.pyc` bytecode in `files/app/`. Pushing a new `main.py` only takes effect for IMPORTED modules. Changes to `main.py` itself require a full rebuild. Imported modules (`core/*.py`, `ui/*.py`) all correctly pick up pushed `.py` files since Python 3.11 prefers `.py` over same-dir `.pyc`.
+
+**adb push staging change:** Use `/data/local/tmp/` not `/sdcard/` as the push staging dir. Android 13 SELinux blocks `run-as <pkg> cp /sdcard/...` with "Permission denied" but allows reads from `/data/local/tmp/`.

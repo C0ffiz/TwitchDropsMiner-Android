@@ -112,13 +112,14 @@ When the user reports a bug on-device:
     Then tell the user: "Build triggered. Run `.\deploy.ps1` once the Actions run completes."
 - **adb push flow** (package = `io.github.c0ffiz.twitchdropsminer`):
   1. `adb shell am force-stop io.github.c0ffiz.twitchdropsminer`
-  2. For each changed file:
+  2. For each changed file (NOTE: use `/data/local/tmp/` as staging — `/sdcard/` is blocked by SELinux on Android 13):
      ```bash
-     adb push <local/path/file.py> /sdcard/<file.py>
-     adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/<file.py> files/app/<path/to/file.py>
+     adb push <local/path/file.py> /data/local/tmp/<file.py>
+     adb shell "run-as io.github.c0ffiz.twitchdropsminer cp /data/local/tmp/<file.py> files/app/<path/to/file.py>"
      ```
   3. `adb shell am start -n io.github.c0ffiz.twitchdropsminer/org.kivy.android.PythonActivity`
   4. Inform the user: "Push successful, app restarted. Please test."
+- **IMPORTANT: `main.py` cannot be pushed** — p4a runs `main.pyc` (pre-compiled bytecode) as the app entry point; pushing `main.py` has no effect. Changes to `main.py` **always require a full rebuild**.
 - **Never guess the package name** — always read it from `buildozer.spec` (`package.domain` + `.` + `package.name`)
 - **deploy.ps1** is the install script: it connects ADB, downloads the latest APK artifact via `gh run download`, installs it with `adb install -r`, and launches the app
 - **Before adding any package to `buildozer.spec` requirements**, run `pip show <pkg> | grep Requires` recursively on all transitive deps and add ALL of them to `buildozer.spec` in the same commit. buildozer does NOT resolve transitive deps automatically — every missing dep is a full 35-min wasted build cycle.
