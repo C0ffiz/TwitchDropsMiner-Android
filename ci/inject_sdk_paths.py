@@ -32,6 +32,19 @@ spec = spec.replace(
     f"android.sdk_path = {sdk}\nandroid.ndk_path = {ndk}\n\n[buildozer]",
 )
 
+
+# Inject p4a.source_dir if P4A_SOURCE_DIR env var is set (CI only).
+# When set, buildozer uses that directory as the p4a source instead of
+# cloning from p4a.branch, so we can use a pre-patched local clone.
+p4a_source = os.environ.get("P4A_SOURCE_DIR", "").strip()
+if p4a_source:
+    spec = re.sub(r"^p4a\.branch\s*=.*\n?", "", spec, flags=re.MULTILINE)
+    spec = re.sub(r"^p4a\.source_dir\s*=.*\n?", "", spec, flags=re.MULTILINE)
+    spec = spec.replace(
+        "[buildozer]",
+        f"p4a.source_dir = {p4a_source}\n\n[buildozer]",
+    )
+
 open(spec_path, "w").write(spec)
 print("--- injected buildozer.spec ---")
 print(open(spec_path).read())

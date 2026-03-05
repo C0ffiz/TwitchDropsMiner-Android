@@ -96,8 +96,8 @@ class ForegroundServiceManager:
             self._context = PythonActivity.mActivity
 
             Context = autoclass("android.content.Context")
-            Build = autoclass("android.os.Build")
-            sdk_int: int = Build.VERSION.SDK_INT
+            Build_VERSION = autoclass("android.os.Build$VERSION")
+            sdk_int: int = Build_VERSION.SDK_INT
 
             # ── Notification channel (API 26+) ───────────────────────────────
             if sdk_int >= 26:
@@ -155,8 +155,8 @@ class ForegroundServiceManager:
         try:
             from jnius import autoclass, cast
 
-            Build = autoclass("android.os.Build")
-            if Build.VERSION.SDK_INT < 23:
+            Build_VERSION = autoclass("android.os.Build$VERSION")
+            if Build_VERSION.SDK_INT < 23:
                 return
 
             PowerManager = autoclass("android.os.PowerManager")
@@ -251,8 +251,8 @@ class ForegroundServiceManager:
         try:
             from jnius import autoclass
 
-            Build = autoclass("android.os.Build")
-            sdk_int: int = Build.VERSION.SDK_INT
+            Build_VERSION = autoclass("android.os.Build$VERSION")
+            sdk_int: int = Build_VERSION.SDK_INT
 
             if sdk_int >= 26:
                 Builder = autoclass("android.app.Notification$Builder")

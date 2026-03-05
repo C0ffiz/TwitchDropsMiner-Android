@@ -43,8 +43,8 @@ def _start_foreground() -> None:
         svc = PythonService.mService
 
         Context = autoclass("android.content.Context")
-        Build = autoclass("android.os.Build")
-        sdk_int = Build.VERSION.SDK_INT
+        Build_VERSION = autoclass("android.os.Build$VERSION")
+        sdk_int = Build_VERSION.SDK_INT
 
         # ── Notification channel (API 26 / Android 8+) ──────────────────────
         if sdk_int >= 26:

@@ -98,8 +98,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-v1-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
-          restore-keys: buildozer-v1-${{ runner.os }}-
+          key: buildozer-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
+          restore-keys: buildozer-v2-${{ runner.os }}-
 
       - name: Print environment (debug)
         run: |
@@ -118,6 +118,15 @@ jobs:
           buildozer android clean || true
         shell: bash
         continue-on-error: true
+
+      - name: Clone and patch python-for-android for Android 14
+        run: |
+          P4A_DIR="${HOME}/p4a"
+          git clone --depth=1 --branch master https://github.com/kivy/python-for-android.git "${P4A_DIR}"
+          source .venv/bin/activate
+          python3 ci/patch_p4a_android14.py "${P4A_DIR}"
+          echo "P4A_SOURCE_DIR=${P4A_DIR}" >> $GITHUB_ENV
+        shell: bash
 
       - name: Build run Buildozer (debug)
         run: |
