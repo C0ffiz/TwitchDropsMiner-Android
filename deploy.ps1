@@ -32,13 +32,18 @@ if ($connectOut -notmatch 'connected') {
 }
 Write-OK "ADB connected"
 
-# Verify the device is authorised
-$devicesStr = (adb devices 2>&1) -join "`n"
+# Verify the device is authorised — target the WiFi device explicitly
+$devicesStr = (adb -s $DEVICE_IP devices 2>&1) -join "`n"
 if ($devicesStr -notmatch "$([regex]::Escape($DEVICE_IP))\s+device") {
     Write-Fail "Device $DEVICE_IP is listed but not authorised (check for 'unauthorized' state). Accept the RSA fingerprint dialog on the device."
     exit 1
 }
 Write-OK "Device authorised"
+
+# Helper: run adb always targeting the WiFi device (avoids 'multiple devices' error)
+function Invoke-Adb {
+    adb -s $DEVICE_IP @args
+}
 
 # ── 2. Download latest APK artifact ──────────────────────────────────────────
 Write-Step "Downloading latest '$ARTIFACT_NAME' artifact from $REPO"
@@ -65,22 +70,32 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Find the APK
-$apkFiles = Get-ChildItem -Path $TEMP_DIR -Filter '*.apk' -Recurse
-if ($apkFiles.Count -eq 0) {
+# Find the APK — prefer arm64-v8a, skip numerically-prefixed artifact duplicates
+$allApks = Get-ChildItem -Path $TEMP_DIR -Filter '*.apk' -Recurse
+if ($allApks.Count -eq 0) {
     Write-Fail "No .apk file found in the downloaded artifact. Check the artifact name ('$ARTIFACT_NAME') and confirm the latest workflow run succeeded."
     exit 1
 }
-if ($apkFiles.Count -gt 1) {
-    Write-Host "    Multiple APKs found — using the first one:" -ForegroundColor Yellow
-    $apkFiles | ForEach-Object { Write-Host "      $_" }
+# 1st preference: arm64-v8a without a leading digit prefix (canonical build output)
+$apkFile = $allApks | Where-Object { $_.Name -match 'arm64-v8a' -and $_.Name -notmatch '^\d' } | Select-Object -First 1
+# 2nd preference: any arm64-v8a
+if (-not $apkFile) { $apkFile = $allApks | Where-Object { $_.Name -match 'arm64-v8a' } | Select-Object -First 1 }
+# Fallback: first file found
+if (-not $apkFile) { $apkFile = $allApks[0] }
+
+if ($allApks.Count -gt 1) {
+    Write-Host "    Multiple APKs in artifact — selected:" -ForegroundColor Yellow
+    $allApks | ForEach-Object {
+        $marker = if ($_.FullName -eq $apkFile.FullName) { ' <-- selected' } else { '' }
+        Write-Host "      $($_.Name)$marker"
+    }
 }
-$apkPath = $apkFiles[0].FullName
-Write-OK "APK found: $apkPath"
+$apkPath = $apkFile.FullName
+Write-OK "APK: $($apkFile.Name)"
 
 # ── 3. Uninstall previous version (removes app + all data for a clean install) ─
 Write-Step "Uninstalling previous version of $PACKAGE (if installed)"
-$uninstallOut = adb uninstall $PACKAGE 2>&1
+$uninstallOut = Invoke-Adb uninstall $PACKAGE 2>&1
 Write-Host "    $uninstallOut"
 if ($uninstallOut -match 'Success') {
     Write-OK "Previous version uninstalled and all app data removed"
@@ -92,7 +107,7 @@ if ($uninstallOut -match 'Success') {
 
 # ── 4. Install APK ───────────────────────────────────────────────────────────
 Write-Step "Installing APK on device ($PACKAGE)"
-$installOut = adb install $apkPath 2>&1
+$installOut = Invoke-Adb install $apkPath 2>&1
 Write-Host "    $installOut"
 if ($installOut -match 'Success') {
     Write-OK "Install succeeded"
@@ -103,7 +118,7 @@ if ($installOut -match 'Success') {
 
 # ── 5. Launch the app ────────────────────────────────────────────────────────
 Write-Step "Launching $PACKAGE"
-adb shell am start -n "$PACKAGE/org.kivy.android.PythonActivity" | Out-Null
+Invoke-Adb shell am start -n "$PACKAGE/org.kivy.android.PythonActivity" | Out-Null
 Write-OK "App launched"
 
 Write-Host "`nDeploy complete. App should be running on the device." -ForegroundColor Green
