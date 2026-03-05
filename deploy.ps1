@@ -32,9 +32,9 @@ if ($connectOut -notmatch 'connected') {
 }
 Write-OK "ADB connected"
 
-# Verify at least one device is authorised
-$devices = adb devices 2>&1
-if ($devices -notmatch "$([regex]::Escape($DEVICE_IP))\s+device") {
+# Verify the device is authorised
+$devicesStr = (adb devices 2>&1) -join "`n"
+if ($devicesStr -notmatch "$([regex]::Escape($DEVICE_IP))\s+device") {
     Write-Fail "Device $DEVICE_IP is listed but not authorised (check for 'unauthorized' state). Accept the RSA fingerprint dialog on the device."
     exit 1
 }
