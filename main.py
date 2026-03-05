@@ -167,6 +167,13 @@ class TwitchDropsMinerApp(MDApp):
             self.logs.pop(0)
         # Android-specific: always buffer — LogsScreen shows all messages whenever entered
         self._update_ui(self.screen_manager.get_screen('logs').add_log, message)
+        # Surface device-login connection errors on the LoginScreen so the user
+        # can see why the activation code hasn't appeared yet.
+        if 'Device login error' in message:
+            short = message[:100] + '\u2026' if len(message) > 100 else message
+            self._update_ui(
+                self.screen_manager.get_screen('login').set_login_status, short
+            )
 
     def on_status(self, status):
         logger.debug("on_status: %r", status)
@@ -226,6 +233,18 @@ class TwitchDropsMinerApp(MDApp):
                 request_permissions(perms)
         except ImportError:
             pass  # Not running on Android
+        # Lock screen to portrait orientation so the app looks correct on all devices.
+        # This complements android.orientation = portrait in buildozer.spec.
+        try:
+            from jnius import autoclass  # type: ignore[import]
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            ActivityInfo = autoclass('android.content.pm.ActivityInfo')
+            PythonActivity.mActivity.setRequestedOrientation(
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            )
+            logger.debug("on_start: portrait orientation locked via pyjnius")
+        except Exception as e:
+            logger.warning("on_start: could not lock portrait orientation: %s", e)
 
     def on_stop(self):
         logger.info("on_stop() — shutting down")

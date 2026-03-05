@@ -381,12 +381,18 @@ class TwitchClient:
             "scopes": "",  # no scopes needed
         }
 
+        # Android-specific: p4a's OpenSSL doesn't trust the system CA store;
+        # supply certifi's bundle so HTTPS connections to id.twitch.tv succeed.
+        _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+
         while True:
             try:
                 now = datetime.now(timezone.utc)
 
                 # ---- Step 1: request device code ----
-                async with aiohttp.ClientSession() as auth_session:
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(ssl=_ssl_ctx)
+                ) as auth_session:
                     async with auth_session.post(
                         "https://id.twitch.tv/oauth2/device",
                         headers=req_headers,
@@ -420,7 +426,9 @@ class TwitchClient:
 
                 # ---- Step 3: polling loop ----
                 # Use a single session for the entire polling sequence.
-                async with aiohttp.ClientSession() as auth_session:
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(ssl=_ssl_ctx)
+                ) as auth_session:
                     code_expired = False
                     while not code_expired:
                         # Sleep first — user won't activate that fast.

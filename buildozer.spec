@@ -22,6 +22,7 @@ android.archs = arm64-v8a
 p4a.branch = master
 
 fullscreen = 0
+android.orientation = portrait
 
 source.exclude_dirs = venv
 source.exclude_patterns = venv/*,tests/*,docs/*,README.md,LICENSE,*.pyc,*.pyo,__pycache__/*,*.log,*.zip,*.tar.gz,*.tar.bz2,*.rar,*.7z,*.dmg,*.exe,*.msi,*.deb,*.rpm,*.pkg,*.apk,*.ipa,*.dSYM/*,*.so,*.dylib,*.dll,*.lib,*.a,*.o,*.obj,*.class,*.jar,*.war,*.ear,*.sar,*.par,*.rar,*.tar,*.gz,*.bz2,*.xz,*.lzma,*.lz,*.lzo,*.lz4,*.snappy,*.zst,*.zstd,*.br,*.bz2,*.gz,*.lzma,*.xz,*.z,*.Z,*.zip,*.7z,*.rar,*.tar.gz,*.tar.bz2,*.tar.xz,*.tar.lzma,*.tar.lz,*.tar.lz4,*.tar.snappy,*.tar.zst,*.tar.zstd,*.tar.br,*.tar.bz2,*.tar.gz,*.tar.lzma,*.tar.lz,*.tar.lz4,*.tar.snappy,*.tar.zst,*.tar.zstd,*.tar.br,*.tar.bz2,*.tar.gz,*.tar.lzma,*.tar.lz,*.tar.lz4,*.tar.snappy,*.tar.zst,*.tar.zstd,*.tar.br

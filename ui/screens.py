@@ -319,45 +319,68 @@ class HelpTabScreen(TabScreen):
 
 
 class LoginScreen(BaseScreen):
-    """Full-screen login overlay using device code OAuth flow.
-
-    show_login_code() is called by main.py on_login_code callback when
-    TwitchClient receives a device code from the Twitch API.  The full UI
-    redesign happens in S16; this stub keeps imports working for S14/S15.
-    """
+    """Full-screen login overlay using device code OAuth flow."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.add_toolbar("Login")
-        content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(16))
+        self._verification_uri = ""
+
+        scroll = ScrollView()
+        # MDBoxLayout with adaptive_height expands to fit content inside ScrollView
+        content = MDBoxLayout(
+            orientation='vertical', padding=dp(24), spacing=dp(16),
+            adaptive_height=True
+        )
+
+        # App title
         content.add_widget(MDLabel(
             text="TwitchDropsMiner", font_style="Display", role="small",
-            halign="center", size_hint_y=None, height=dp(50)
+            halign="center", size_hint_y=None, height=dp(64)
         ))
+
+        # Instruction — updated once code arrives
         self.instruction_label = MDLabel(
-            text="Press \"Login with Twitch\" to begin.",
-            halign="center", size_hint_y=None, height=dp(40)
+            text="Connecting to Twitch\u2026",
+            halign="center", size_hint_y=None, height=dp(56)
         )
         content.add_widget(self.instruction_label)
-        # Code display — shown once TwitchClient fires on_login_code
-        self.code_label = MDLabel(
-            text="", font_style="Display", role="small",
-            halign="center", size_hint_y=None, height=dp(70)
+
+        # Code card — invisible until device code arrives; stays in layout so
+        # show_login_code() only needs to flip opacity (no layout manipulation)
+        self.code_card = MDCard(
+            orientation='vertical', padding=dp(16), spacing=dp(8),
+            size_hint_y=None, height=dp(130)
         )
-        content.add_widget(self.code_label)
+        self.code_card.add_widget(MDLabel(
+            text="Your activation code:",
+            halign="center", size_hint_y=None, height=dp(28)
+        ))
+        self.code_label = MDLabel(
+            text="", font_style="Display", role="medium",
+            halign="center", size_hint_y=None, height=dp(66)
+        )
+        self.code_card.add_widget(self.code_label)
+        self.code_card.opacity = 0
+        content.add_widget(self.code_card)
+
+        # Open browser button — invisible until code arrives
         self.open_btn = MDButton(
-            size_hint_y=None, height=dp(50), on_release=self._open_browser
+            size_hint_y=None, height=dp(52), on_release=self._open_browser
         )
         self.open_btn.add_widget(MDButtonText(text="Open Twitch Website"))
         self.open_btn.opacity = 0
         self.open_btn.disabled = True
         content.add_widget(self.open_btn)
+
+        # Status / waiting / error line
         self.status_label = MDLabel(
-            text="", halign="center", size_hint_y=None, height=dp(40)
+            text="", halign="center", size_hint_y=None, height=dp(56)
         )
         content.add_widget(self.status_label)
-        self.layout.add_widget(content)
-        self._verification_uri = ""
+
+        scroll.add_widget(content)
+        self.layout.add_widget(scroll)
 
     def show_login_code(self, user_code: str, verification_uri: str):
         """Display the device activation code and enable the browser button."""
@@ -365,9 +388,15 @@ class LoginScreen(BaseScreen):
         self._verification_uri = verification_uri
         self.instruction_label.text = "Visit the link below and enter the code:"
         self.code_label.text = user_code
-        self.status_label.text = "Waiting for activation\u2026"
+        self.code_card.opacity = 1
         self.open_btn.opacity = 1
         self.open_btn.disabled = False
+        self.status_label.text = "Waiting for activation\u2026"
+
+    def set_login_status(self, message: str):
+        """Update status label — called by main.py to surface connection errors."""
+        logger.debug("LoginScreen.set_login_status: %r", message)
+        self.status_label.text = message
 
     def _open_browser(self, *args):
         import webbrowser
