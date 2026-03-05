@@ -1,4 +1,5 @@
 """UI Screens for TwitchDropsMiner Android - KivyMD 2.0"""
+import logging
 from kivy.clock import Clock
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
@@ -15,6 +16,8 @@ from kivymd.uix.progressindicator import MDLinearProgressIndicator
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
 from kivymd.uix.selectioncontrol import MDSwitch
+
+logger = logging.getLogger("TwitchDrops.UI")
 
 
 class BaseScreen(Screen):
@@ -131,6 +134,7 @@ class MainTabScreen(TabScreen):
         self.layout.add_widget(scroll)
 
     def on_enter(self, *args):
+        logger.debug("MainTabScreen.on_enter")
         tc = self.app.twitch_client
         if tc is None:
             return
@@ -175,12 +179,14 @@ class InventoryTabScreen(TabScreen):
 
     def on_enter(self, *args):
         # Android-specific: refresh on enter in case the callback fired before this tab was visible
+        logger.debug("InventoryTabScreen.on_enter")
         tc = self.app.twitch_client
         if tc is None:
             return
         self.update_inventory(tc.inventory)
 
     def update_inventory(self, inventory):
+        logger.debug("update_inventory: %d campaigns", len(inventory) if inventory else 0)
         self.list_view.clear_widgets()
         if not inventory:
             item = MDListItem()
@@ -241,6 +247,7 @@ class SettingsTabScreen(TabScreen):
 
     def on_enter(self, *args):
         # Android-specific: read settings here not in __init__ to avoid None app at construction
+        logger.debug("SettingsTabScreen.on_enter")
         self._loading = True
         settings = self.app.settings
         username = getattr(settings, 'username', '') or ''
@@ -354,6 +361,7 @@ class LoginScreen(BaseScreen):
 
     def show_login_code(self, user_code: str, verification_uri: str):
         """Display the device activation code and enable the browser button."""
+        logger.debug("LoginScreen.show_login_code: code=%r", user_code)
         self._verification_uri = verification_uri
         self.instruction_label.text = "Visit the link below and enter the code:"
         self.code_label.text = user_code
@@ -363,6 +371,7 @@ class LoginScreen(BaseScreen):
 
     def _open_browser(self, *args):
         import webbrowser
+        logger.debug("LoginScreen._open_browser: uri=%r", self._verification_uri)
         if self._verification_uri:
             webbrowser.open(self._verification_uri)
 
@@ -378,11 +387,13 @@ class ChannelsScreen(BaseScreen):
 
     def on_enter(self, *args):
         # Android-specific: rebuild on enter in case user opens screen before push callback fires
+        logger.debug("ChannelsScreen.on_enter")
         channels = self.app.twitch_client.channels if self.app.twitch_client else {}
         self.update_channels(channels)
 
     def update_channels(self, channels):
         # Android-specific: called by main.py on_channels when fetch completes; rebuilds list on main thread
+        logger.debug("update_channels: %d channels", len(channels) if channels else 0)
         self.list_view.clear_widgets()
         if not channels:
             item = MDListItem()
@@ -420,6 +431,7 @@ class LogsScreen(BaseScreen):
 
     def on_enter(self, *args):
         # Android-specific: pre-populate from buffered logs if screen is opened for the first time
+        logger.debug("LogsScreen.on_enter: %d buffered messages", len(self.app.logs))
         if not self.list_view.children:
             for msg in self.app.logs:
                 item = MDListItem()
@@ -492,6 +504,7 @@ class AppScreen(Screen):
 
     def _on_switch_tabs(self, bar, item, item_icon, item_text):
         """Switch inner tab manager when the user taps a navigation bar item."""
+        logger.debug("_on_switch_tabs: %r", item_text)
         self.tab_manager.current = item_text.lower()
 
     # --- Callback delegation (called by main.py) ---

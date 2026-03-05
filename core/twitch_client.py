@@ -107,6 +107,7 @@ class TwitchClient:
 
     def _callback(self, name: str, *args, **kwargs):
         """Call a registered callback if it exists."""
+        logger.debug("_callback: %s", name)
         if name in self.callbacks and self.callbacks[name]:
             try:
                 self.callbacks[name](*args, **kwargs)

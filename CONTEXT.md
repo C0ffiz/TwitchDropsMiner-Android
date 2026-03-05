@@ -48,16 +48,79 @@ GitHub Copilot Premium requests have a token limit per session. When a session e
 
 ---
 
-## ⚠️ Next Steps (for next chat session)
+## Android Debug Workflow
+
+Device: Samsung Galaxy S23 FE (SM-S711B) connected via USB — `adb devices` shows `RXCX800EP6L`.
+Package: `io.github.c0ffiz.twitchdropsminer`
+Activity: `org.kivy.android.PythonActivity`
+Build output: `bin/*.apk` (buildozer android debug)
+
+### Debug loop (agent-assisted)
+```
+User tests on S23 FE → finds an issue
+  ↓
+User describes the problem to the agent
+  ↓
+Agent reads relevant source files
+  ↓
+Agent modifies code (adds/adjusts debug output, fixes logic)
+  ↓
+Agent runs in terminal:
+  adb logcat -s python:* AndroidRuntime:E *:F   ← capture latest crash/trace
+  adb push <file.py> /sdcard/ && adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/<file.py> files/app/<file.py>
+                                  ← push changed .py files only (no rebuild needed)
+  buildozer android debug → adb install -r bin/*.apk
+                                  ← only if native deps changed
+  adb shell am force-stop io.github.c0ffiz.twitchdropsminer && adb shell am start -n io.github.c0ffiz.twitchdropsminer/org.kivy.android.PythonActivity
+                                  ← restart app
+  ↓
+User tests again
+```
+
+### Quick ADB commands
+```bash
+# View Python logs (most useful)
+adb logcat -s python:* AndroidRuntime:E *:F
+
+# Install latest build
+adb install -r bin/*.apk
+
+# Restart app (no reinstall)
+adb shell am force-stop io.github.c0ffiz.twitchdropsminer
+adb shell am start -n io.github.c0ffiz.twitchdropsminer/org.kivy.android.PythonActivity
+
+# Push a single changed Python file (fast iteration)
+adb push main.py /sdcard/
+adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/main.py files/app/main.py
+
+adb push ui/screens.py /sdcard/
+adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/screens.py files/app/ui/screens.py
+
+adb push core/twitch_client.py /sdcard/
+adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/twitch_client.py files/app/core/twitch_client.py
+```
+
+### What is already instrumented (as of debug-setup session)
+- `logging.basicConfig(level=DEBUG)` — all `logger.debug/info/warning/error/critical` calls appear in logcat tagged `python`
+- `sys.excepthook` + asyncio exception handler — any uncaught exception prints full traceback to logcat
+- `main.py` — `build()`, `_start_device_login()`, `_start_login_validation()`, all 10 callbacks, `start_mining()`, `stop_mining()`, `logout()`, `on_start()`, `on_stop()` all emit `[TwitchDrops]` debug lines
+- `ui/screens.py` — `_on_switch_tabs()`, each `on_enter()`, `show_login_code()`, `update_inventory()`, `update_channels()` all emit `[TwitchDrops.UI]` debug lines
+- `core/twitch_client.py` — `_callback()` logs every callback dispatch by name; GQL request payloads logged at DEBUG
+
+---
+
+## ⚠️ Current Status / Next Steps
 
 After the ANDROID_APP switch the **saved WEB token will fail** (client_id mismatch → `login()` raises `LoginException` → `_start_login_validation` falls back to device login screen automatically). Users will need to log in once with the new ANDROID_APP device code. That is expected and handled.
 
-**What to verify in the next session:**
-1. Run `python main.py`, expect device login screen (old WEB token cleared by mismatch detection).
-2. Complete device login → should navigate to AppScreen and auto-start mining.
-3. Confirm `fetch_inventory()` succeeds (no GQL errors in log).
-4. Confirm `InventoryTabScreen` displays campaigns.
-5. If GQL still fails, capture the **exact error message** and the `[GQL request payload]` that precedes it.
+**Pending verification on device (S23 FE):**
+1. Build APK with `buildozer android debug`, install with `adb install -r bin/*.apk`.
+2. Run `adb logcat -s python:* AndroidRuntime:E *:F`, then launch app.
+3. Expect `build(): no saved token → LoginScreen + device login` in logcat.
+4. Complete device login → look for `on_login_success: navigating to AppScreen` + `start_mining() called`.
+5. Confirm `fetch_inventory()` succeeds (no `GQLException` in log).
+6. Confirm `InventoryTabScreen` displays campaigns.
+7. If GQL still fails, capture the **exact error message** and the `GQL request payload` line that precedes it.
 
 ---
 
@@ -304,6 +367,45 @@ ScreenManager
 | `apprise` added to `buildozer.spec` requirements | Optionally imported in `notifications.py` — must be present in the Android build for webhook notification feature |
 | `requests` removed from `requirements.txt` | Never imported; project uses `aiohttp` exclusively; was copied verbatim from upstream |
 | `pyjnius` removed from `requirements.txt` | It is a p4a recipe, not a pip package; it cannot install on a Windows dev machine; remains in `buildozer.spec` requirements where it belongs |
+
+---
+
+## Development Workflow
+
+**Repo:** `C0ffiz/TwitchDropsMiner-Android`
+**Package:** `io.github.c0ffiz.twitchdropsminer`
+**Device:** Samsung Galaxy S23 FE connected via WiFi ADB at `192.168.68.53:5555`
+
+### Full cycle
+
+```
+1. Trigger GitHub Actions manually (or via push) to build the APK
+2. After build completes, run .\deploy.ps1 in PowerShell to download and install
+   - deploy.ps1 does: adb connect → gh run download → adb install -r → launch app
+3. Test manually on the Samsung S23 FE
+4. Describe the problem to the Copilot Agent
+5. Agent reads adb logcat, analyzes the issue, makes code changes
+6. Agent decides:
+   - If only .py or .kv files changed → do adb push (no rebuild needed)
+   - If requirements.txt, buildozer.spec, or any C/Cython file changed → stop and warn
+     the user to trigger a new Actions build
+7. If doing adb push:
+   a. adb shell am force-stop io.github.c0ffiz.twitchdropsminer
+   b. For each changed file:
+        adb push <file> /sdcard/<filename>
+        adb shell run-as io.github.c0ffiz.twitchdropsminer cp /sdcard/<filename> files/app/<path/to/file>
+   c. adb shell am start -n io.github.c0ffiz.twitchdropsminer/org.kivy.android.PythonActivity
+   d. Inform the user: "Push successful, app restarted. Please test."
+8. If rebuild needed: inform the user to go back to step 1
+```
+
+### Quick reference — ADB over WiFi setup (one-time)
+```bash
+# With USB connected first:
+adb tcpip 5555
+adb connect 192.168.68.53:5555
+# Disconnect USB, all subsequent commands use WiFi
+```
 | `apprise>=1.9.0` added to `requirements.txt` | Mirrors the addition to `buildozer.spec`; allows local dev/testing of webhook notification paths |
 | `apprise` removed from `buildozer.spec` requirements | No p4a recipe; C-extension deps fail cross-compile; `notifications.py` already guards with `_APPRISE_AVAILABLE`; plyer handles on-device notifications |
 | `android.archs = arm64-v8a` (was armeabi-v7a) | Samsung S23 FE (Snapdragon 8 Gen 1) is 64-bit only; Android 14 One UI 6.1 has no 32-bit userspace; 32-bit-only APK rejected by Package Manager |
