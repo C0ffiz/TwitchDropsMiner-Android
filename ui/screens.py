@@ -123,7 +123,7 @@ class MainTabScreen(TabScreen):
         # Single mining toggle button — text synced with real mining state in on_enter()
         self._mining_btn = MDButton(
             style="filled",
-            size_hint_x=1,
+            size_hint=(1, None), height=dp(56),
             on_release=self._toggle_mining
         )
         self._mining_btn.theme_bg_color = "Custom"
@@ -132,7 +132,6 @@ class MainTabScreen(TabScreen):
             text="Start Mining",
             theme_text_color="Custom",
             text_color=(1, 1, 1, 1),
-            font_style="Title", role="medium",
         )
         self._mining_btn.add_widget(self._mining_btn_lbl)
         content.add_widget(self._mining_btn)
@@ -388,7 +387,7 @@ class LoginScreen(BaseScreen):
 
         # Open browser button — invisible until code arrives
         self.open_btn = MDButton(
-            size_hint_y=None, height=dp(52), on_release=self._open_browser
+            size_hint=(1, None), height=dp(56), on_release=self._open_browser
         )
         self.open_btn.add_widget(MDButtonText(text="Open Twitch Website"))
         self.open_btn.opacity = 0
