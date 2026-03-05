@@ -11,6 +11,7 @@ from kivymd.app import MDApp
 from kivymd.uix.snackbar import MDSnackbar, MDSnackbarText  # Android-specific: KivyMD 2.x API
 from core.settings import Settings
 from core.twitch_client import TwitchClient
+from core.foreground_service import ForegroundServiceManager
 from ui.screens import LoginScreen, AppScreen, ChannelsScreen, LogsScreen
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(name)s] %(levelname)s - %(message)s')
@@ -27,6 +28,7 @@ class TwitchDropsMinerApp(MDApp):
         self.twitch_client = None
         self.screen_manager = None
         self.logs = []
+        self.fg_service = ForegroundServiceManager()
         self.loop = asyncio.new_event_loop()
         self.async_thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self.async_thread.start()
@@ -178,15 +180,32 @@ class TwitchDropsMinerApp(MDApp):
     def on_status(self, status):
         logger.debug("on_status: %r", status)
         self._update_ui(self.screen_manager.get_screen('app').update_status, status)
+        # Android-specific: mirror status in persistent notification
+        self.fg_service.set_status(status)
 
     def on_progress(self, current, total):
         self._update_ui(self.screen_manager.get_screen('app').update_progress, current, total)
+        # Android-specific: update minutes in notification
+        self.fg_service.update_progress(current, total)
 
     def on_channel(self, channel_name):
         self._update_ui(self.screen_manager.get_screen('app').update_channel, channel_name)
+        self.fg_service.set_channel(channel_name)
 
     def on_drop(self, drop):
         self._update_ui(self.screen_manager.get_screen('app').update_drop, drop)
+        # Android-specific: extract drop details for the persistent notification
+        if drop is not None:
+            try:
+                game_name = drop.campaign.game.name
+            except Exception:
+                game_name = ''
+            drop_name = getattr(drop, 'name', '')
+            current_mins = getattr(drop, 'current_minutes', 0)
+            total_mins = getattr(drop, 'required_minutes', 0)
+            self.fg_service.set_drop(game_name, drop_name, current_mins, total_mins)
+        else:
+            self.fg_service.set_drop('', '', 0, 0)
 
     def on_inventory(self, inventory):
         logger.debug("on_inventory: %d campaigns", len(inventory) if inventory else 0)
@@ -207,11 +226,13 @@ class TwitchDropsMinerApp(MDApp):
         logger.info("start_mining() called (running=%s)", self.twitch_client._running if self.twitch_client else 'N/A')
         if self.twitch_client and not self.twitch_client._running:
             asyncio.run_coroutine_threadsafe(self.twitch_client.start(), self.loop)
+            self.fg_service.start_mining()  # Android-specific: start foreground service + wake lock
 
     def stop_mining(self):
         logger.info("stop_mining() called (running=%s)", self.twitch_client._running if self.twitch_client else 'N/A')
         if self.twitch_client and self.twitch_client._running:
             asyncio.run_coroutine_threadsafe(self.twitch_client.stop(), self.loop)
+            self.fg_service.stop_mining()  # Android-specific: release wake lock + update notification
 
     def logout(self):
         logger.info("logout() called")
@@ -222,17 +243,20 @@ class TwitchDropsMinerApp(MDApp):
         self._start_device_login()
 
     def on_start(self):
-        """Request POST_NOTIFICATIONS runtime permission on Android 13+ (API 33+)."""
+        """Request runtime permissions and set up foreground service / wake lock."""
         logger.info("on_start() — app is running")
         try:
             from android.permissions import request_permissions, Permission  # type: ignore[import]
-            perms = []
-            if hasattr(Permission, 'POST_NOTIFICATIONS'):
-                perms.append(Permission.POST_NOTIFICATIONS)
+            perms = [Permission.POST_NOTIFICATIONS] if hasattr(Permission, 'POST_NOTIFICATIONS') else []
             if perms:
                 request_permissions(perms)
         except ImportError:
             pass  # Not running on Android
+
+        # Android-specific: set up persistent notification channel + wake-lock manager
+        self.fg_service.setup()
+        # Ask the user to exempt us from battery optimisation (one-time dialog)
+        self.fg_service.request_battery_exemption()
         # Lock screen to portrait orientation so the app looks correct on all devices.
         # This complements android.orientation = portrait in buildozer.spec.
         try:
@@ -248,9 +272,9 @@ class TwitchDropsMinerApp(MDApp):
 
     def on_stop(self):
         logger.info("on_stop() — shutting down")
+        # Android-specific: release wake lock and cancel notification immediately
+        self.fg_service.shutdown()
         # Android-specific: schedule a clean shutdown coroutine on the event loop.
-        # stop() cancels tasks and closes the session before we halt the loop.
-        # settings.save() is called only after stop() completes, not before.
         async def _stop_then_halt():
             if self.twitch_client:
                 await self.twitch_client.stop()

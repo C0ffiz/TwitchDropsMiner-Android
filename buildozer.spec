@@ -9,7 +9,12 @@ source.include_exts = py,png,jpg,kv,atlas,json,txt
 version = 0.1
 requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,asynckivy,asyncgui,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs,typing-extensions,async-timeout,charset-normalizer==2.1.1
 
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,FOREGROUND_SERVICE,POST_NOTIFICATIONS,WAKE_LOCK,RECEIVE_BOOT_COMPLETED
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,FOREGROUND_SERVICE,FOREGROUND_SERVICE_DATA_SYNC,POST_NOTIFICATIONS,WAKE_LOCK,RECEIVE_BOOT_COMPLETED,REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+
+# Background foreground service: keeps mining alive when app is backgrounded.
+# service/main.py sets up startForeground() and the persistent status notification.
+# :foreground makes p4a add android:foregroundServiceType="dataSync" to the manifest.
+services = TDMService:service/main.py:foreground
 
 android.api = 34
 android.minapi = 24
