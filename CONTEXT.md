@@ -421,9 +421,10 @@ adb connect 192.168.68.53:5555
 | `on_start()` requests `Permission.POST_NOTIFICATIONS` at runtime | Android 13+ requires runtime grant; manifest declaration alone is silent-fail |
 | `on_stop()` join timeout reduced 5 s → 3 s with alive-check warning | Stays under Android ANR watchdog threshold; logs warning instead of silently timing out |
 | `MDNavigationBar` constructed with `add_widget()` loop (not positional args) | Kivy `Widget.__init__(**kwargs)` does not accept positional children; positional pattern raises `TypeError` at app start |
-| `charset-normalizer==2.3.0` pinned (not 3.x) | 3.x ships `md.so` C extension; pip installs x86_64 pre-built wheel on CI → `EM_X86_64 instead of EM_AARCH64` crash on arm64 device; 2.3.0 is pure Python and accepted by aiohttp 3.9+ |
+| `charset-normalizer==2.1.1` pinned (not 3.x) | 3.x ships `md.so` C extension; pip installs x86_64 pre-built wheel on CI → `EM_X86_64 instead of EM_AARCH64` crash on arm64 device; **2.3.0 does NOT exist on PyPI** (versions jump 2.1.1 → 3.0.0b1); use 2.1.1 |
 | Packages with C extensions and no p4a recipe must use pure-Python-only versions | General rule: check `unzip -l <wheel>.whl \| grep .so` before adding to buildozer.spec; if `.so` present and no p4a recipe → find pure-Python alternative or older version |
 | `async-timeout`, `charset-normalizer` added to `buildozer.spec` | aiohttp transitive deps discovered at runtime; full chain now complete — see "aiohttp Dependency Chain" section |
+| `asynckivy` + `asyncgui` added to `buildozer.spec` | KivyMD master added `asynckivy` import in `kivymd/uix/appbar/appbar.py`; `asynckivy` depends on `asyncgui`; both must be in requirements or app crashes at import with `ModuleNotFoundError: No module named 'asynckivy'` |
 
 ---
 
@@ -496,13 +497,15 @@ All of these must be in `buildozer.spec` requirements. They were discovered cras
 | `multidict` | `aiohttp` / `yarl` requirement |
 | `yarl` | `aiohttp` requirement |
 | `async-timeout` | `aiohttp` requirement |
-| `charset-normalizer==2.3.0` | `aiohttp` requirement — **PINNED to 2.x** (3.x ships `md.so` C extension that gets downloaded as x86_64 pre-built wheel on CI, causing `EM_X86_64 instead of EM_AARCH64` crash at runtime) |
+| `charset-normalizer==2.1.1` | `aiohttp` requirement — **PINNED to 2.1.1** (3.x ships `md.so` C extension → x86_64 wheel on CI → arm64 crash; **2.3.0 does NOT exist on PyPI**, use 2.1.1) |
+| `asynckivy` | KivyMD master requirement (new dep added in `kivymd/uix/appbar/appbar.py`) |
+| `asyncgui` | `asynckivy` transitive requirement |
 
 **Current `requirements =` line in `buildozer.spec`:**
 ```
-requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs,typing-extensions,async-timeout,charset-normalizer==2.3.0
+requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,asynckivy,asyncgui,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs,typing-extensions,async-timeout,charset-normalizer==2.1.1
 ```
 
-**Rule for future deps with C extensions:** If a package has no p4a recipe and ships a `.so` (C extension), pip will install the x86_64 pre-built wheel on the CI runner → crash on arm64 device. Always check for a pure-Python version or find the package's p4a recipe. The `charset-normalizer==2.3.0` pin is the canonical example of using the pure-Python version of a package.
+**Rule for future deps with C extensions:** If a package has no p4a recipe and ships a `.so` (C extension), pip will install the x86_64 pre-built wheel on the CI runner → crash on arm64 device. Always check for a pure-Python version or find the package's p4a recipe. The `charset-normalizer==2.1.1` pin is the canonical example.
 
-**Current build (as of 2026-03-05):** Run 22702211573 — triggered with the charset-normalizer==2.3.0 fix. When it completes, run `.\deploy.ps1` to install.
+**Current status (as of 2026-03-05):** App launches successfully on S23 FE ✅ (run 22703238467). Login flow / mining not yet end-to-end tested.
