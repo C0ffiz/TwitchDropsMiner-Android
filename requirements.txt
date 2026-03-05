@@ -12,3 +12,4 @@ propcache>=0.2.0
 idna>=3.0
 aiohappyeyeballs>=2.3.0
 typing-extensions>=4.0.0
+async-timeout>=4.0.0
