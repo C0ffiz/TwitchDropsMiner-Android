@@ -49,6 +49,7 @@ debug APK on every `push`, `pull_request`, and can be triggered manually via
 `workflow_dispatch`.
 
 - Runs on **Ubuntu** using Buildozer and the Android SDK.
+- Triggered manually via **Actions → Build TwitchDropsMiner APK → Run workflow**.
 - To download the built APK: open the **Actions** tab → select a run →
   **Artifacts → `apk`**.
 
@@ -56,8 +57,7 @@ debug APK on every `push`, `pull_request`, and can be triggered manually via
 
 ## Credits
 
-- **Fork base:** [repojkle0506-eng/TwitchDropsMiner-Android](https://github.com/repojkle0506-eng/TwitchDropsMiner-Android) — forked here because the upstream was incomplete and unusable.
 - **Original project:** [DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
-- **Upstream reference:** [JourneyDocker/TwitchDropsMiner](https://github.com/JourneyDocker/TwitchDropsMiner)
+- **Desktop reference:** [JourneyDocker/TwitchDropsMiner](https://github.com/JourneyDocker/TwitchDropsMiner)
 
 
