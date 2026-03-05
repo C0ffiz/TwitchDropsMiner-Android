@@ -2,6 +2,9 @@ name: Build TwitchDropsMiner APK
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
   build:
@@ -210,3 +213,29 @@ jobs:
             ./.buildozer/android/platform/build-*/outputs/**/*.apk
             ./.buildozer/android/platform/build-*/outputs/apk/**/*.apk
           if-no-files-found: warn
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TwitchDropsMiner Android ${{ github.ref_name }}
+          body: |
+            ## TwitchDropsMiner Android ${{ github.ref_name }}
+
+            ### Install
+            1. Download the APK below.
+            2. Enable **Install from unknown sources** on your Android device.
+            3. Open the APK and install.
+            4. Launch the app, tap **Login with Twitch**, enter the code at https://www.twitch.tv/activate.
+
+            ### Requirements
+            - Android 7.0+ (API 24)
+            - arm64-v8a device (64-bit)
+
+            ### What's included
+            - Automatic drop mining with foreground service
+            - OAuth device code login (no password)
+            - Inventory, Channels, and Logs screens
+            - Auto-claim toggle
+          files: bin/*.apk
+          fail_on_unmatched_files: false
