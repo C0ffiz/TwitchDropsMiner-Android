@@ -421,6 +421,9 @@ adb connect 192.168.68.53:5555
 | `on_start()` requests `Permission.POST_NOTIFICATIONS` at runtime | Android 13+ requires runtime grant; manifest declaration alone is silent-fail |
 | `on_stop()` join timeout reduced 5 s → 3 s with alive-check warning | Stays under Android ANR watchdog threshold; logs warning instead of silently timing out |
 | `MDNavigationBar` constructed with `add_widget()` loop (not positional args) | Kivy `Widget.__init__(**kwargs)` does not accept positional children; positional pattern raises `TypeError` at app start |
+| `charset-normalizer==2.3.0` pinned (not 3.x) | 3.x ships `md.so` C extension; pip installs x86_64 pre-built wheel on CI → `EM_X86_64 instead of EM_AARCH64` crash on arm64 device; 2.3.0 is pure Python and accepted by aiohttp 3.9+ |
+| Packages with C extensions and no p4a recipe must use pure-Python-only versions | General rule: check `unzip -l <wheel>.whl \| grep .so` before adding to buildozer.spec; if `.so` present and no p4a recipe → find pure-Python alternative or older version |
+| `async-timeout`, `charset-normalizer` added to `buildozer.spec` | aiohttp transitive deps discovered at runtime; full chain now complete — see "aiohttp Dependency Chain" section |
 
 ---
 
@@ -474,3 +477,32 @@ After the next GitHub Actions run, verify:
 5. App opens to LoginScreen, completes device code login, navigates to AppScreen
 6. No `CERTIFICATE_VERIFY_FAILED` in LogsScreen
 7. Mining auto-starts after login; first notification shows Android permission dialog
+
+---
+
+## 🐛 aiohttp Dependency Chain (fully discovered — as of 2026-03-05)
+
+All of these must be in `buildozer.spec` requirements. They were discovered crash-by-crash because buildozer does not resolve transitive pip deps.
+
+| Dep added | Reason |
+|---|---|
+| `attrs` | `aiohttp` runtime requirement |
+| `propcache` | `yarl 1.23+` requirement |
+| `idna` | `aiohttp` requirement |
+| `aiohappyeyeballs` | `aiohttp` requirement |
+| `typing-extensions` | `aiosignal` requirement |
+| `aiosignal` | `aiohttp` requirement |
+| `frozenlist` | `aiosignal` requirement |
+| `multidict` | `aiohttp` / `yarl` requirement |
+| `yarl` | `aiohttp` requirement |
+| `async-timeout` | `aiohttp` requirement |
+| `charset-normalizer==2.3.0` | `aiohttp` requirement — **PINNED to 2.x** (3.x ships `md.so` C extension that gets downloaded as x86_64 pre-built wheel on CI, causing `EM_X86_64 instead of EM_AARCH64` crash at runtime) |
+
+**Current `requirements =` line in `buildozer.spec`:**
+```
+requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs,typing-extensions,async-timeout,charset-normalizer==2.3.0
+```
+
+**Rule for future deps with C extensions:** If a package has no p4a recipe and ships a `.so` (C extension), pip will install the x86_64 pre-built wheel on the CI runner → crash on arm64 device. Always check for a pure-Python version or find the package's p4a recipe. The `charset-normalizer==2.3.0` pin is the canonical example of using the pure-Python version of a package.
+
+**Current build (as of 2026-03-05):** Run 22702211573 — triggered with the charset-normalizer==2.3.0 fix. When it completes, run `.\deploy.ps1` to install.
