@@ -123,15 +123,16 @@ class MainTabScreen(TabScreen):
         # Single mining toggle button — text synced with real mining state in on_enter()
         self._mining_btn = MDButton(
             style="filled",
-            size_hint=(1, None), height=dp(52),
+            size_hint_x=1,
             on_release=self._toggle_mining
         )
         self._mining_btn.theme_bg_color = "Custom"
-        self._mining_btn.md_bg_color = (0.91, 0.12, 0.39, 1)  # Material Pink A400
+        self._mining_btn.md_bg_color = (0.91, 0.53, 0.64, 1)  # soft rose pink
         self._mining_btn_lbl = MDButtonText(
             text="Start Mining",
             theme_text_color="Custom",
-            text_color=(1, 1, 1, 1)
+            text_color=(1, 1, 1, 1),
+            font_style="Title", role="medium",
         )
         self._mining_btn.add_widget(self._mining_btn_lbl)
         content.add_widget(self._mining_btn)
