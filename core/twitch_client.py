@@ -1020,6 +1020,10 @@ class TwitchClient:
         # Android-specific: no pystray, no gui.tray, no gui.channels, no translate()
         # All status updates go through self.update_status() and self.print()
         """
+        await self._run_impl()
+
+    async def _run_impl(self) -> None:
+        """Inner implementation of _run()."""
         if not self.is_logged_in():
             await self.login()
 
@@ -1227,6 +1231,10 @@ class TwitchClient:
         if self._running:
             return
         self._running = True
+        # Reset from EXIT state left by the previous stop().  The change_state()
+        # guard blocks transitions out of EXIT, so we must bypass it here.
+        self.state = State.IDLE
+        self._state_change.clear()
         self.print("Starting TwitchDropsMiner...")
         self.update_status("Starting...")
         try:
@@ -1244,6 +1252,11 @@ class TwitchClient:
             return
 
         self._running = False
+        # Signal _run_impl()'s while-True loop to exit via the EXIT state.
+        # Without this, the loop stays blocked at `await _state_change.wait()`
+        # forever and the old start() coroutine never returns, so the next
+        # start_mining() call creates a second concurrent _run() instance.
+        self.change_state(State.EXIT)
         self.print("Stopping miner...")
         self.update_status("Stopping...")
 
