@@ -97,9 +97,19 @@ When the user reports a bug on-device:
 
 - **Always start** by running: `adb connect 192.168.68.53:5555`
 - **To read crash logs** run: `adb logcat -d -s python:* AndroidRuntime:E *:F`
+- **After making code changes**, always git commit and push immediately — no waiting for the user to ask:
+  ```bash
+  git add -A
+  git commit -m "<short description of change>"
+  git push
+  ```
 - **After making code changes**, check which files were modified:
-  - `.py` or `.kv` only → proceed with adb push flow (no rebuild needed)
-  - `requirements.txt`, `buildozer.spec`, any `.c`/`.pyx`/`.so` file, or any other non-Python file → **stop** and tell the user a full rebuild is required via GitHub Actions
+  - `.py` or `.kv` only → do the **adb push flow** (no rebuild needed)
+  - `requirements.txt`, `buildozer.spec`, any `.c`/`.pyx`/`.so` file, or any other non-Python file → trigger a new GitHub Actions build immediately after pushing:
+    ```bash
+    gh workflow run build-android.yml
+    ```
+    Then tell the user: "Build triggered. Run `.\deploy.ps1` once the Actions run completes."
 - **adb push flow** (package = `io.github.c0ffiz.twitchdropsminer`):
   1. `adb shell am force-stop io.github.c0ffiz.twitchdropsminer`
   2. For each changed file:
@@ -110,6 +120,4 @@ When the user reports a bug on-device:
   3. `adb shell am start -n io.github.c0ffiz.twitchdropsminer/org.kivy.android.PythonActivity`
   4. Inform the user: "Push successful, app restarted. Please test."
 - **Never guess the package name** — always read it from `buildozer.spec` (`package.domain` + `.` + `package.name`)
-- **Never trigger a build yourself** — builds are done manually by the user via GitHub Actions (or by running `.\deploy.ps1` after the build completes)
-- **After pushing changes, do NOT do `git push`** unless the user explicitly asks
 - **deploy.ps1** is the install script: it connects ADB, downloads the latest APK artifact via `gh run download`, installs it with `adb install -r`, and launches the app
