@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,txt
 
 version = 0.1
-requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs
+requirements = python3,kivy==2.3.0,https://github.com/kivymd/KivyMD/archive/master.zip,materialyoucolor,pillow,pyjnius,certifi,android,plyer,aiohttp,yarl,aiosignal,frozenlist,multidict,attrs,propcache,idna,aiohappyeyeballs,typing-extensions
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,FOREGROUND_SERVICE,POST_NOTIFICATIONS,WAKE_LOCK,RECEIVE_BOOT_COMPLETED
 
