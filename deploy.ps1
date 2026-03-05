@@ -49,15 +49,19 @@ New-Item -ItemType Directory -Path $TEMP_DIR | Out-Null
 
 try {
     # gh run download picks the most recent successful run that produced the artifact
-    gh run download `
+    $ghOut = gh run download `
         --repo $REPO `
         --name $ARTIFACT_NAME `
-        --dir $TEMP_DIR `
-        2>&1 | Tee-Object -Variable ghOut
-    Write-Host ($ghOut -join "`n")
+        --dir $TEMP_DIR 2>&1
+    if ($ghOut) { Write-Host ($ghOut -join "`n") }
 } catch {
     Write-Fail "gh run download failed: $_"
     Write-Host "    Make sure 'gh' is installed and authenticated (run: gh auth login)"
+    exit 1
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "gh run download exited with code $LASTEXITCODE — no successful artifact found, or not authenticated."
+    Write-Host "    Run: gh auth login   and confirm the latest Actions workflow run succeeded."
     exit 1
 }
 
