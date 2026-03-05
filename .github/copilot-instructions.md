@@ -121,3 +121,4 @@ When the user reports a bug on-device:
   4. Inform the user: "Push successful, app restarted. Please test."
 - **Never guess the package name** — always read it from `buildozer.spec` (`package.domain` + `.` + `package.name`)
 - **deploy.ps1** is the install script: it connects ADB, downloads the latest APK artifact via `gh run download`, installs it with `adb install -r`, and launches the app
+- **Before adding any package to `buildozer.spec` requirements**, run `pip show <pkg> | grep Requires` recursively on all transitive deps and add ALL of them to `buildozer.spec` in the same commit. buildozer does NOT resolve transitive deps automatically — every missing dep is a full 35-min wasted build cycle.

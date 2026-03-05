@@ -30,7 +30,15 @@ jobs:
           python3 -m pip install --upgrade pip setuptools wheel
         shell: bash
 
+      - name: Cache Android SDK and NDK
+        id: cache-android-sdk
+        uses: actions/cache@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-v1-api34-ndk25.1.8937393
+
       - name: Setup Android SDK cmdline-tools
+        if: steps.cache-android-sdk.outputs.cache-hit != 'true'
         run: |
           export ANDROID_HOME="${HOME}/android-sdk"
           export ANDROID_SDK_ROOT="${HOME}/android-sdk"
@@ -44,31 +52,39 @@ jobs:
           export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
           yes 2>/dev/null | sdkmanager --sdk_root="${ANDROID_HOME}" --licenses || true
           sdkmanager --sdk_root="${ANDROID_HOME}" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393" "cmake;3.22.1"
-          echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/25.1.8937393" >> $GITHUB_ENV
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "${ANDROID_HOME}/platform-tools" >> $GITHUB_PATH
+          # Create legacy sdkmanager symlink for Buildozer
+          mkdir -p "${ANDROID_HOME}/tools/bin"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "${ANDROID_HOME}/tools/bin/sdkmanager"
+          ln -sf "${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager" "${ANDROID_HOME}/tools/bin/avdmanager"
         shell: bash
 
-      - name: Create legacy sdkmanager symlink for Buildozer
+      - name: Set Android SDK environment variables
         run: |
-          mkdir -p "${HOME}/android-sdk/tools/bin"
-          ln -sf "${HOME}/android-sdk/cmdline-tools/latest/bin/sdkmanager" "${HOME}/android-sdk/tools/bin/sdkmanager"
-          ln -sf "${HOME}/android-sdk/cmdline-tools/latest/bin/avdmanager" "${HOME}/android-sdk/tools/bin/avdmanager"
-          ls -la "${HOME}/android-sdk/tools/bin/"
+          echo "ANDROID_HOME=${HOME}/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${HOME}/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${HOME}/android-sdk/ndk/25.1.8937393" >> $GITHUB_ENV
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "${HOME}/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "${HOME}/android-sdk/platform-tools" >> $GITHUB_PATH
         shell: bash
 
-      - name: Cache pip and .buildozer
+      - name: Cache pip (shared across runs)
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: v2-${{ runner.os }}-pypi-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            v2-${{ runner.os }}-pypi-
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt', '.github/workflows/build-android.yml') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Cache virtualenv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-v1-${{ runner.os }}-${{ hashFiles('requirements.txt', '.github/workflows/build-android.yml') }}
+          restore-keys: venv-v1-${{ runner.os }}-
 
       - name: Create and activate virtualenv
+        if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -76,6 +92,14 @@ jobs:
           pip install "buildozer>=1.5.0" "cython==0.29.37"
           pip install "python-for-android>=2023.9.0,<2025.0.0"
         shell: bash
+
+      - name: Cache .buildozer platform artifacts
+        id: cache-buildozer
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: buildozer-v1-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
+          restore-keys: buildozer-v1-${{ runner.os }}-
 
       - name: Print environment (debug)
         run: |
@@ -87,6 +111,7 @@ jobs:
         shell: bash
 
       - name: Build clean previous state
+        if: steps.cache-buildozer.outputs.cache-hit != 'true'
         run: |
           source .venv/bin/activate
           buildozer --version || true
