@@ -120,15 +120,21 @@ class MainTabScreen(TabScreen):
         drop_card.add_widget(self.progress_bar)
         content.add_widget(drop_card)
 
-        # Start / Stop buttons
-        buttons = BoxLayout(size_hint_y=None, height=dp(60), spacing=dp(8))
-        start_btn = MDButton(on_release=lambda x: self.app.start_mining())
-        start_btn.add_widget(MDButtonText(text="Start Mining"))
-        buttons.add_widget(start_btn)
-        stop_btn = MDButton(on_release=lambda x: self.app.stop_mining())
-        stop_btn.add_widget(MDButtonText(text="Stop Mining"))
-        buttons.add_widget(stop_btn)
-        content.add_widget(buttons)
+        # Single mining toggle button — text synced with real mining state in on_enter()
+        self._mining_btn = MDButton(
+            style="filled",
+            size_hint=(1, None), height=dp(52),
+            on_release=self._toggle_mining
+        )
+        self._mining_btn.theme_bg_color = "Custom"
+        self._mining_btn.md_bg_color = (0.91, 0.12, 0.39, 1)  # Material Pink A400
+        self._mining_btn_lbl = MDButtonText(
+            text="Start Mining",
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 1)
+        )
+        self._mining_btn.add_widget(self._mining_btn_lbl)
+        content.add_widget(self._mining_btn)
 
         scroll.add_widget(content)
         self.layout.add_widget(scroll)
@@ -141,6 +147,21 @@ class MainTabScreen(TabScreen):
         self.update_drop(tc.current_drop)
         ch = tc.watching_channel.get_with_default(None)
         self.update_channel(ch.display_name if ch else "")
+        self._set_mining_btn(tc._running)  # sync toggle text with actual mining state
+
+    def _set_mining_btn(self, running: bool):
+        self._mining_btn_lbl.text = "Stop Mining" if running else "Start Mining"
+
+    def _toggle_mining(self, *args):
+        tc = self.app.twitch_client
+        if tc is None:
+            return
+        if tc._running:
+            self.app.stop_mining()
+            self._set_mining_btn(False)
+        else:
+            self.app.start_mining()
+            self._set_mining_btn(True)
 
     def update_status(self, status: str):
         self.status_label.text = status
