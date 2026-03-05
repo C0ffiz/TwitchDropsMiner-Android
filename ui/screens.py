@@ -159,6 +159,9 @@ class MainTabScreen(TabScreen):
 
     def update_status(self, status: str):
         self.status_label.text = status
+        tc = self.app.twitch_client
+        if tc is not None:
+            self._set_mining_btn(tc._running)
 
     def update_channel(self, channel_name: str):
         self.channel_label.text = channel_name or "None"
