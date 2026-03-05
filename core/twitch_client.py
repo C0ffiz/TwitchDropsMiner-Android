@@ -64,6 +64,7 @@ class TwitchClient:
         self._session: Optional[aiohttp.ClientSession] = None
         self._logged_in: AwaitableValue = AwaitableValue()
         self._state_change = asyncio.Event()  # Android-specific
+        self._stop_event: asyncio.Event = asyncio.Event()  # set by stop() to interrupt retry sleeps in start()
 
         # Watch control
         self._watching_restart = asyncio.Event()  # Android-specific
@@ -1226,25 +1227,87 @@ class TwitchClient:
 
             await self._state_change.wait()
 
+    async def _teardown(self) -> None:
+        """Cancel pending tasks and close connections. Used by stop() and crash-restart."""
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._watch_task
+            self._watch_task = None
+        if self._mnt_task is not None:
+            self._mnt_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._mnt_task
+            self._mnt_task = None
+        if self.websocket is not None:
+            with suppress(Exception):
+                await self.websocket.stop(clear_topics=True)
+            self.websocket = None
+        with suppress(Exception):
+            await self.close_session()
+
     async def start(self):
-        """Launch the miner state machine."""
+        """
+        Launch the miner state machine.
+        Auto-restarts on network/GQL errors with exponential back-off so the
+        app keeps running for days/weeks without manual intervention.
+        """
         if self._running:
             return
         self._running = True
-        # Reset from EXIT state left by the previous stop().  The change_state()
-        # guard blocks transitions out of EXIT, so we must bypass it here.
+        # Reset from EXIT state left by the previous stop().
         self.state = State.IDLE
         self._state_change.clear()
+        self._stop_event.clear()
         self.print("Starting TwitchDropsMiner...")
         self.update_status("Starting...")
-        try:
-            await self.close_session()  # Android-specific: force session rebuild with confirmed token before mining
-            await self._run()
-        except Exception as e:
-            self.print(f"Fatal error: {e}")
-            self.update_status("Error")
-            await self.stop()
-            raise
+
+        _RETRY_INITIAL: int = 30   # first back-off in seconds
+        _RETRY_MAX: int = 300      # cap at 5 minutes
+        retry_delay: int = _RETRY_INITIAL
+
+        while self._running:
+            run_started: float = asyncio.get_event_loop().time()
+            try:
+                # Force session rebuild with confirmed token before each mining run
+                await self.close_session()
+                await self._run()
+                # _run() returned normally — EXIT state was reached (stop() was called)
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if not self._running:
+                    break  # stop() was called externally — do not restart
+                run_duration = asyncio.get_event_loop().time() - run_started
+                logger.exception(
+                    "Mining loop crashed after %.0fs — restarting in %ds",
+                    run_duration, retry_delay
+                )
+                self.print(f"Mining error ({type(e).__name__}): {e}")
+                self.update_status(f"Error \u2014 reconnecting in {retry_delay}s\u2026")
+                await self._teardown()
+                # Interruptible sleep: stop() sets _stop_event to abort the wait early
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), timeout=float(retry_delay)
+                    )
+                    break  # _stop_event fired — stop() was called
+                except asyncio.TimeoutError:
+                    pass  # full delay elapsed — proceed to restart
+                except asyncio.CancelledError:
+                    break
+                if not self._running:
+                    break
+                # Reset back-off after a stable run; otherwise double it up to the cap
+                if run_duration >= 60:
+                    retry_delay = _RETRY_INITIAL
+                else:
+                    retry_delay = min(retry_delay * 2, _RETRY_MAX)
+                self.print("Restarting TwitchDropsMiner...")
+                self.update_status("Restarting\u2026")
+                self.state = State.IDLE
+                self._state_change.clear()
 
     async def stop(self):
         """Stop the miner cleanly."""
@@ -1252,28 +1315,13 @@ class TwitchClient:
             return
 
         self._running = False
+        self._stop_event.set()   # wake up any retry sleep in start()
         # Signal _run_impl()'s while-True loop to exit via the EXIT state.
-        # Without this, the loop stays blocked at `await _state_change.wait()`
-        # forever and the old start() coroutine never returns, so the next
-        # start_mining() call creates a second concurrent _run() instance.
+        # Without this, the loop stays blocked at `await _state_change.wait()`.
         self.change_state(State.EXIT)
         self.print("Stopping miner...")
         self.update_status("Stopping...")
-
-        if self._watch_task:
-            self._watch_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._watch_task
-
-        if self._mnt_task:
-            self._mnt_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._mnt_task
-
-        if self.websocket:
-            await self.websocket.stop(clear_topics=True)
-
-        await self.close_session()
+        await self._teardown()
         self.print("Miner stopped")
         self.update_status("Stopped")
 

@@ -221,18 +221,32 @@ class ForegroundServiceManager:
         """
         Start service/main.py as an Android Foreground Service.
 
-        Disabled until the CI rebuild lands with the patched manifest
-        (android:foregroundServiceType="dataSync") and PythonService.java
-        (3-arg startForeground).  Without those patches the service process
-        crashes immediately with MissingForegroundServiceTypeException /
-        IllegalArgumentException, which triggers an "App has stopped" dialog
-        for the user even though the main mining process is unaffected.
+        The CI build applies two prerequisite patches automatically:
+          • AndroidManifest.tmpl.xml — android:foregroundServiceType="dataSync"
+          • PythonService.java        — 3-arg startForeground() on API 29+
+        Both are in ci/patch_p4a_android14.py which runs before every buildozer
+        invocation in the GitHub Actions workflow.
 
-        The wake lock and notification (managed below) still work from the
-        main activity process while the service is disabled.
+        Having a real OS-level foreground service raises the process to
+        IMPORTANCE_FOREGROUND in Android's OOM killer priority list, which
+        means Android will not kill the process even under memory pressure —
+        essential for weeks-long background mining.
         """
-        logger.info("[FG] Android background service skipped (pending manifest rebuild)")
-        return
+        if not _IS_ANDROID:
+            return
+        if self._service is not None:
+            return  # already running
+        try:
+            from android import AndroidService  # type: ignore[import]  # p4a built-in
+            self._service = AndroidService(
+                "TwitchDropsMiner",
+                "Mining drops in background",
+            )
+            self._service.start("none")
+            logger.info("[FG] Android background service started")
+        except Exception as exc:
+            logger.warning("[FG] _start_android_service failed: %s", exc)
+            self._service = None
 
     def _stop_android_service(self) -> None:
         """Stop the Android Service."""
