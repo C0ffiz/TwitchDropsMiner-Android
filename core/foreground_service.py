@@ -51,7 +51,9 @@ _IS_ANDROID: bool = False
 try:
     from jnius import autoclass as _autoclass  # noqa: F401  (availability check only)
     _IS_ANDROID = True
-except ImportError:
+except Exception:
+    # ImportError when jnius not installed; generic Exception on desktop where
+    # jnius is installed but has no JVM ("no jvm dll found")
     pass
 
 
