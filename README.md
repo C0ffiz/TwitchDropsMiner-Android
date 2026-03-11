@@ -1,4 +1,4 @@
-# TwitchDropsMiner Android
+# Twitch Drops Miner — Android
 
 [![Build](https://github.com/C0ffiz/TwitchDropsMiner-Android/actions/workflows/build-android.yml/badge.svg)](https://github.com/C0ffiz/TwitchDropsMiner-Android/actions/workflows/build-android.yml)
 [![Release](https://img.shields.io/github/v/release/C0ffiz/TwitchDropsMiner-Android?label=latest)](https://github.com/C0ffiz/TwitchDropsMiner-Android/releases/latest)
