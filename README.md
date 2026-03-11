@@ -11,6 +11,18 @@ Based on [JourneyDocker/TwitchDropsMiner](https://github.com/JourneyDocker/Twitc
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/107b23e4-7bd8-4c0f-92e5-8e1bec81fc38" width="18%" />
+  <img src="https://github.com/user-attachments/assets/879fda21-58df-4198-92c7-cd4c2b88948d" width="18%" />
+  <img src="https://github.com/user-attachments/assets/0fd5372f-63c6-4856-b50c-f5d10cc92851" width="18%" />
+  <img src="https://github.com/user-attachments/assets/4231a1a6-7804-4a6d-84f1-e93147cf28cf" width="18%" />
+  <img src="https://github.com/user-attachments/assets/971ad2ee-c40e-4b7d-a480-b8f8c3206627" width="18%" />
+</p>
+
+---
+
 ## Features
 
 - **Automatic drop mining** — watches eligible channels, claims drops the moment they unlock
