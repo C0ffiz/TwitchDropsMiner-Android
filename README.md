@@ -120,6 +120,15 @@ python main.py
 
 ---
 
+## Roadmap
+
+- [ ] Language selection in Settings
+- [ ] More detailed drop info in the Inventory tab
+- [ ] Filters and sorting in the Inventory tab
+- [ ] Game priority and exclusion lists
+
+---
+
 ## Credits
 
 - **Original project:** [DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
