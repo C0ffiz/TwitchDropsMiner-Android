@@ -126,6 +126,7 @@ python main.py
 - [ ] More detailed drop info in the Inventory tab
 - [ ] Filters and sorting in the Inventory tab
 - [ ] Game priority and exclusion lists
+- [ ] Test and verify compatibility across more Android devices and manufacturers
 
 ---
 
